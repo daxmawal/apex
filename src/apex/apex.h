@@ -414,6 +414,48 @@ APEX_EXPORT apex_profile * apex_get_profile(apex_profiler_type type,
     const void * identifier);
 
 /**
+ \brief Query whether an APEX Kokkos Tools tuning context has converged.
+
+ The context key is the stable context name built by APEX from Kokkos context
+ variables, for example "[kokkos.kernel_name:my_kernel,tree_node:main]".
+ This returns false if Kokkos tuning is disabled, the context is unknown, or
+ the context has not converged.
+
+ \param context_key The APEX Kokkos tuning context key.
+ \return true if the active or cached context is known to have converged.
+ */
+APEX_EXPORT bool apex_kokkos_tuning_context_converged(
+    const char* context_key);
+
+/**
+ \brief Query whether any APEX Kokkos Tools tuning context matching a context
+        variable has converged.
+
+ This is a generic helper for stable Kokkos context variables such as
+ "kokkos.kernel_name" or "kokkos.kernel_type". It returns false if Kokkos
+ tuning is disabled, the context variable/value pair is unknown, or matching
+ contexts have not converged.
+
+ \param variable_name The Kokkos context variable name.
+ \param variable_value The Kokkos context variable value.
+ \return true if a matching active or cached context has converged.
+ */
+APEX_EXPORT bool apex_kokkos_tuning_context_variable_converged(
+    const char* variable_name, const char* variable_value);
+
+/**
+ \brief Query whether any APEX Kokkos Tools tuning context for a kernel name
+        has converged.
+
+ This checks contexts containing the Kokkos context variable
+ "kokkos.kernel_name" with the requested value.
+
+ \param kernel_name The Kokkos kernel name.
+ \return true if a matching active or cached kernel context has converged.
+ */
+APEX_EXPORT bool apex_kokkos_kernel_converged(const char* kernel_name);
+
+/**
  \brief Get the current power reading
 
  This function will return the current power level for the node, measured in Watts.
@@ -611,4 +653,3 @@ FOREACH_APEX_STRING_OPTION(apex_macro)
 #endif
 
 #endif //APEX_H
-

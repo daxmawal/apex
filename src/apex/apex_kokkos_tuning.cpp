@@ -942,6 +942,68 @@ bool getCachedTunings(std::string name,
     return true;
 }
 
+bool context_variable_matches(const std::string& context_key,
+    const std::string& variable_name, const std::string& variable_value) {
+    const std::string prefix = variable_name + ":";
+    size_t pos = 0;
+    while ((pos = context_key.find(prefix, pos)) != std::string::npos) {
+        const bool token_start = (pos == 0 ||
+            context_key[pos - 1] == '[' ||
+            context_key[pos - 1] == ',');
+        if (!token_start) {
+            pos += prefix.size();
+            continue;
+        }
+        const size_t value_start = pos + prefix.size();
+        const size_t value_end = context_key.find_first_of(",]", value_start);
+        const std::string value = context_key.substr(value_start,
+            value_end == std::string::npos ? std::string::npos :
+            value_end - value_start);
+        if (value == variable_value) {
+            return true;
+        }
+        pos = value_start;
+    }
+    return false;
+}
+
+bool kokkos_tuning_context_converged(const std::string& context_key) {
+    if (!apex::apex_options::use_kokkos_tuning()) { return false; }
+    apex::in_apex prevent_memory_tracking;
+    KokkosSession& session = KokkosSession::getSession();
+    session.checkForCache();
+    auto cached = session.cachedTunings.find(context_key);
+    if (cached != session.cachedTunings.end()) { return true; }
+    auto active = session.requests.find(context_key);
+    if (active == session.requests.end() || active->second == nullptr) {
+        return false;
+    }
+    return active->second->has_converged();
+}
+
+bool kokkos_tuning_context_variable_converged(
+    const std::string& variable_name, const std::string& variable_value) {
+    if (!apex::apex_options::use_kokkos_tuning()) { return false; }
+    apex::in_apex prevent_memory_tracking;
+    KokkosSession& session = KokkosSession::getSession();
+    session.checkForCache();
+    for (const auto& cached : session.cachedTunings) {
+        if (context_variable_matches(cached.first, variable_name,
+            variable_value)) {
+            return true;
+        }
+    }
+    for (const auto& request : session.requests) {
+        if (request.second != nullptr &&
+            request.second->has_converged() &&
+            context_variable_matches(request.first, variable_name,
+            variable_value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void set_params(std::shared_ptr<apex_tuning_request> request,
     const size_t vars,
     Kokkos_Tools_VariableValue* values) {
@@ -1187,6 +1249,27 @@ extern "C" {
  * Kokkos_Tools_ with Kokkos::Tools:: in C++ tools)
  *
  */
+
+APEX_EXPORT bool apex_kokkos_tuning_context_converged(
+    const char* context_key) {
+    if (context_key == nullptr) { return false; }
+    return kokkos_tuning_context_converged(std::string(context_key));
+}
+
+APEX_EXPORT bool apex_kokkos_tuning_context_variable_converged(
+    const char* variable_name, const char* variable_value) {
+    if (variable_name == nullptr || variable_value == nullptr) {
+        return false;
+    }
+    return kokkos_tuning_context_variable_converged(
+        std::string(variable_name), std::string(variable_value));
+}
+
+APEX_EXPORT bool apex_kokkos_kernel_converged(const char* kernel_name) {
+    if (kernel_name == nullptr) { return false; }
+    return kokkos_tuning_context_variable_converged(
+        std::string("kokkos.kernel_name"), std::string(kernel_name));
+}
 
 /* Declares a tuning variable named name with uniqueId id and all the
  * semantic information stored in info. Note that the VariableInfo
