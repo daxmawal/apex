@@ -247,16 +247,16 @@ int main() {
             missing_b_output = value.value.int_value;
         }
     }
-    if (missing_a_output != -9 || missing_b_output != -7) {
+    if (missing_a_output != 20 || missing_b_output != 20) {
         std::stringstream ss;
-        ss << "Cache-only replay changed outputs for an uncached context: "
+        ss << "Cache replay returned unexpected outputs for the best-so-far context: "
            << "a_output=" << missing_a_output
            << ", b_output=" << missing_b_output;
         return report_failure(ss.str(), output, cache_file);
     }
-    if (output.find("No cached Kokkos tuning for") == std::string::npos) {
+    if (output.find("Using Kokkos cached best-so-far") == std::string::npos) {
         return report_failure(
-            "Cache-only replay did not report the intentionally uncached context.",
+            "Cache-only replay did not report the expected best-so-far context.",
             output, cache_file);
     }
     if (!apex_kokkos_tuning_context_converged(

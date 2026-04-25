@@ -21,16 +21,6 @@ Add tests that simulate two APEX runs using the same Kokkos tuning cache:
 - Verify `BestSoFar` contexts are not reported as converged.
 - Verify cache-only replay still only applies fully converged contexts.
 
-## Best-Effort Replay Mode
-
-When not all contexts have converged, add an execution mode that uses the best
-parameters found so far without restarting tuning or profiling.
-
-The current cache-only replay mode should only apply fully converged contexts.
-A separate best-effort mode could also apply `BestSoFar` entries for
-non-converged contexts, while making it clear that those values are not final
-converged tuning results.
-
 ## Context Definition
 
 Give APEX a context that accurately reflects the workload without exploding the
