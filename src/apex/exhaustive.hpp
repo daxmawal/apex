@@ -17,6 +17,19 @@ namespace exhaustive {
 
 enum class VariableType { doubletype, longtype, stringtype } ;
 
+struct VariableCheckpoint {
+    size_t current_index = 0;
+    size_t best_index = 0;
+};
+
+struct Checkpoint {
+    bool valid = false;
+    size_t k = 1;
+    double cost = std::numeric_limits<double>::max();
+    double best_cost = std::numeric_limits<double>::max();
+    std::map<std::string, VariableCheckpoint> variables;
+};
+
 class Variable {
 public:
     std::vector<double> dvalues;
@@ -111,6 +124,44 @@ public:
     }
     void saveBestSettings() {
         for (auto& v : vars) { v.second.getBest(); }
+    }
+    Checkpoint get_checkpoint() const {
+        Checkpoint checkpoint;
+        checkpoint.valid = true;
+        checkpoint.k = k;
+        checkpoint.cost = cost;
+        checkpoint.best_cost = best_cost;
+        for (const auto& v : vars) {
+            VariableCheckpoint variable;
+            variable.current_index = v.second.current_index;
+            variable.best_index = v.second.best_index;
+            checkpoint.variables.insert(std::make_pair(v.first, variable));
+        }
+        return checkpoint;
+    }
+    bool restore_checkpoint(const Checkpoint& checkpoint) {
+        if (!checkpoint.valid) { return false; }
+        if (checkpoint.variables.size() != vars.size()) { return false; }
+        for (const auto& checkpoint_var : checkpoint.variables) {
+            auto var = vars.find(checkpoint_var.first);
+            if (var == vars.end()) { return false; }
+            if (checkpoint_var.second.current_index > var->second.max_index ||
+                checkpoint_var.second.best_index > var->second.max_index) {
+                return false;
+            }
+        }
+        k = checkpoint.k;
+        if (k > kmax) { k = kmax; }
+        if (k == 0) { k = 1; }
+        cost = checkpoint.cost;
+        best_cost = checkpoint.best_cost;
+        for (const auto& checkpoint_var : checkpoint.variables) {
+            auto var = vars.find(checkpoint_var.first);
+            var->second.current_index = checkpoint_var.second.current_index;
+            var->second.best_index = checkpoint_var.second.best_index;
+            var->second.set_current_value();
+        }
+        return true;
     }
     void printBestSettings() {
         std::string d("[");
