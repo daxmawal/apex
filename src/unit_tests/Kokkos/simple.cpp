@@ -5,7 +5,7 @@
 #include <Kokkos_Core.hpp>
 
 #ifndef EXECUTION_SPACE
-#define EXECUTION_SPACE DefaultHostExecutionSpace
+#define EXECUTION_SPACE DefaultExecutionSpace
 #endif
 
 void go(size_t i) {

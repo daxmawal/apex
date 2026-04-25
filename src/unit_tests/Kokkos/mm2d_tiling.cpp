@@ -198,7 +198,7 @@ int main(int argc, char *argv[]){
 
         // thread count - setup
         int64_t max_threads = std::min(std::thread::hardware_concurrency(),
-                (unsigned int)(Kokkos::OpenMP::concurrency()));
+                (unsigned int)(Kokkos::OpenMP().concurrency()));
         out_value_id[4] = declareOutputThreadCount("thread_count", max_threads);
         // thread count - end setup
 
