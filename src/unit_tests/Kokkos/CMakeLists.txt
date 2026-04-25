@@ -7,9 +7,9 @@ include_directories (${APEX_SOURCE_DIR}/src/unit_tests/Kokkos)
 link_directories (${APEX_BINARY_DIR}/src/apex)
 #link_directories (${APEX_BINARY_DIR}/src/apex_pthread_wrapper)
 
-if(NOT APPLE)
+if(NOT APPLE AND (NOT DEFINED Kokkos_ENABLE_OPENMP OR Kokkos_ENABLE_OPENMP))
     set(openmp_programs mm2d_tiling)
-endif(NOT APPLE)
+endif()
 
 set(example_programs
     cache_replay

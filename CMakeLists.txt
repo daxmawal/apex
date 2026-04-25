@@ -32,7 +32,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "IntelLLVM")
 endif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "IntelLLVM")
 
 set (CMAKE_CXX_EXTENSIONS_COMPUTED_DEFAULT OFF)
-set (CMAKE_CXX_STANDARD_COMPUTED_DEFAULT 17)
+set (CMAKE_CXX_STANDARD_COMPUTED_DEFAULT 20)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/Modules)
 include(APEX_DefaultOptions)
@@ -363,7 +363,7 @@ endif (NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "PGI")
 # ---------------------------------------------------
 
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # By the way, GCC lies.  It accepts the flag, but doesn't have the support.
@@ -664,10 +664,12 @@ if(APEX_WITH_KOKKOS)
         if(APEX_BUILD_TESTS)
             # Just for testing
             SET(Kokkos_LIBRARY kokkoscore)
-            if(NOT APPLE)
+            if(NOT APPLE AND NOT DEFINED Kokkos_ENABLE_OPENMP)
                 set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "" FORCE)
-            endif(NOT APPLE)
-            set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "" FORCE)
+            endif()
+            if(NOT DEFINED Kokkos_ENABLE_SERIAL)
+                set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "" FORCE)
+            endif()
             set(Kokkos_ARCH_NATIVE ON CACHE BOOL "" FORCE)
             set(Kokkos_ENABLE_TUNING ON CACHE BOOL "" FORCE)
             add_subdirectory(kokkos)
