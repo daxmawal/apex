@@ -1048,9 +1048,10 @@ bool applyCachedValues(std::string name,
 
 bool getCachedTunings(std::string name,
     const size_t vars,
-    Kokkos_Tools_VariableValue* values) {
+    Kokkos_Tools_VariableValue* values,
+    bool sample = true) {
     KokkosSession& session = KokkosSession::getSession();
-    return applyCachedValues(name, session.cachedTunings, vars, values, true);
+    return applyCachedValues(name, session.cachedTunings, vars, values, sample);
 }
 
 bool getCachedBestSoFar(std::string name,
@@ -1489,14 +1490,28 @@ void kokkosp_request_values(
     // check if we have a cached result
     bool success{false};
     if (session.use_history) {
-        success = getCachedTunings(name, numTuningVariables, tuningVariableValues);
+        success = getCachedTunings(name, numTuningVariables,
+            tuningVariableValues, !kokkos_tuning_cache_only());
     }
     if (success) {
         session.used_history.insert(contextId);
     } else if (kokkos_tuning_cache_only()) {
-        if (session.verbose) {
+        bool bestSoFar{false};
+        if (session.use_history) {
+            bestSoFar = getCachedBestSoFar(name, numTuningVariables,
+                tuningVariableValues);
+        }
+        if (bestSoFar) {
+            session.used_history.insert(contextId);
+            if (session.verbose) {
+                std::cout << std::string(getDepth(), ' ');
+                std::cout << "Using Kokkos cached best-so-far for " << name
+                    << std::endl;
+            }
+        } else if (session.verbose) {
             std::cout << std::string(getDepth(), ' ');
-            std::cout << "No cached Kokkos tuning for " << name << std::endl;
+            std::cout << "No cached Kokkos tuning or best-so-far for "
+                << name << std::endl;
         }
     } else {
         if (session.use_history &&
