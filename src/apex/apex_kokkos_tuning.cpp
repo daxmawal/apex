@@ -394,6 +394,7 @@ std::string strategy_to_string(std::shared_ptr<apex_tuning_request> request) {
 
 void KokkosSession::writeCache(void) {
     if(use_history) { return; }
+    if(apex::apex_options::use_kokkos_tuning_cache_only()) { return; }
     //if(!saveCache) { return; }
     // did the user specify a file?
     if (strlen(apex::apex_options::kokkos_tuning_cache()) > 0) {
@@ -820,6 +821,15 @@ int register_policy() {
     return APEX_NOERROR;
 }
 
+bool kokkos_tuning_hooks_enabled() {
+    return apex::apex_options::use_kokkos_tuning() ||
+        apex::apex_options::use_kokkos_tuning_cache_only();
+}
+
+bool kokkos_tuning_cache_only() {
+    return apex::apex_options::use_kokkos_tuning_cache_only();
+}
+
 size_t& getDepth() {
     static size_t depth{0};
     return depth;
@@ -968,7 +978,7 @@ bool context_variable_matches(const std::string& context_key,
 }
 
 bool kokkos_tuning_context_converged(const std::string& context_key) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return false; }
+    if (!kokkos_tuning_hooks_enabled()) { return false; }
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
     session.checkForCache();
@@ -983,7 +993,7 @@ bool kokkos_tuning_context_converged(const std::string& context_key) {
 
 bool kokkos_tuning_context_variable_converged(
     const std::string& variable_name, const std::string& variable_value) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return false; }
+    if (!kokkos_tuning_hooks_enabled()) { return false; }
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
     session.checkForCache();
@@ -1279,7 +1289,7 @@ APEX_EXPORT bool apex_kokkos_kernel_converged(const char* kernel_name) {
  */
 void kokkosp_declare_output_type(const char* name, const size_t id,
     Kokkos_Tools_VariableInfo& info) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return; }
+    if (!kokkos_tuning_hooks_enabled()) { return; }
     // don't track memory in this function.
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
@@ -1302,7 +1312,7 @@ void kokkosp_declare_output_type(const char* name, const size_t id,
  */
 void kokkosp_declare_input_type(const char* name, const size_t id,
     Kokkos_Tools_VariableInfo& info) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return; }
+    if (!kokkos_tuning_hooks_enabled()) { return; }
     // don't track memory in this function.
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
@@ -1341,7 +1351,7 @@ void kokkosp_request_values(
     const Kokkos_Tools_VariableValue* contextVariableValues,
     const size_t numTuningVariables,
     Kokkos_Tools_VariableValue* tuningVariableValues) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return; }
+    if (!kokkos_tuning_hooks_enabled()) { return; }
     // first, get the current timer node in the task tree
     //auto tlt = apex::thread_instance::get_top_level_timer();
     auto tlt = apex::thread_instance::instance().get_current_profiler();
@@ -1375,6 +1385,11 @@ void kokkosp_request_values(
     }
     if (success) {
         session.used_history.insert(contextId);
+    } else if (kokkos_tuning_cache_only()) {
+        if (session.verbose) {
+            std::cout << std::string(getDepth(), ' ');
+            std::cout << "No cached Kokkos tuning for " << name << std::endl;
+        }
     } else {
         uint64_t delta = 0;
         bool converged = false;
@@ -1402,7 +1417,7 @@ void kokkosp_request_values(
  * starting measurement.
  */
 void kokkosp_begin_context(size_t contextId) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return; }
+    if (!kokkos_tuning_hooks_enabled()) { return; }
     // don't track memory in this function.
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
@@ -1419,7 +1434,7 @@ void kokkosp_begin_context(size_t contextId) {
  * values can now be associated with a result.
  */
 void kokkosp_end_context(const size_t contextId) {
-    if (!apex::apex_options::use_kokkos_tuning()) { return; }
+    if (!kokkos_tuning_hooks_enabled()) { return; }
     // don't track memory in this function.
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();

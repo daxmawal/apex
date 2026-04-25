@@ -62,6 +62,8 @@ where APEX options are zero or more of:
     --apex:openacc                enable OpenACC support
     --apex:kokkos                 enable Kokkos support
     --apex:kokkos-tuning          enable Kokkos runtime autotuning support
+    --apex:kokkos-tuning-cache-only
+                                  replay cached Kokkos tuning results without autotuning missing contexts
     --apex:kokkos-fence           enable Kokkos fences for async kernels
     --apex:kokkos-counters        enable Kokkos counters for allocations and data transfers
     --apex:raja                   enable RAJA support
@@ -118,6 +120,7 @@ apex_opts=yes
 openacc=no
 kokkos=no
 kokkos_tuning=no
+kokkos_tuning_cache_only=no
 kokkos_fence=no
 kokkos_counters=no
 raja=no
@@ -189,6 +192,11 @@ while (( "$#" )); do
       kokkos_tuning=yes
       # Fencing is required for accurate tuning
       kokkos_fence=yes
+      shift
+      ;;
+    --apex:kokkos_tuning_cache_only|--apex:kokkos-tuning-cache-only)
+      kokkos=yes
+      kokkos_tuning_cache_only=yes
       shift
       ;;
     --apex:kokkos-counters)
@@ -838,6 +846,9 @@ fi
 if [ ${kokkos_tuning} = yes ] ; then
     export APEX_KOKKOS_TUNING=1
 fi
+if [ ${kokkos_tuning_cache_only} = yes ] ; then
+    export APEX_KOKKOS_TUNING_CACHE_ONLY=1
+fi
 if [ ${kokkos_counters} = yes ] ; then
     export APEX_KOKKOS_COUNTERS=1
 fi
@@ -977,4 +988,3 @@ if [ ${postprocess} = yes ] ; then
     fi
     cd -
 fi
-
