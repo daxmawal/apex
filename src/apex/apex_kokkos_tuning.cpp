@@ -26,6 +26,7 @@
 #include <set>
 #include <map>
 #include <numeric>
+#include <algorithm>
 #include <stdlib.h>
 #include "apex.hpp"
 #include "Kokkos_Profiling_C_Interface.h"
@@ -327,6 +328,7 @@ public:
     std::map<std::string, size_t> cachedVariableIDs;
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedTunings;
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedBestSoFar;
+    std::map<std::string, apex::exhaustive::Checkpoint> cachedExhaustiveCheckpoints;
     int saved_node_id;
 };
 
@@ -391,6 +393,15 @@ std::string strategy_to_string(std::shared_ptr<apex_tuning_request> request) {
         return std::string("nelder mead");
     }
     return "unknown?";
+}
+
+std::string cacheValue(const std::string& line) {
+    const std::string delimiter = ": ";
+    size_t offset = line.find(delimiter);
+    if (offset == std::string::npos) { return std::string(); }
+    std::string value = line.substr(offset + delimiter.size());
+    value.erase(std::remove(value.begin(), value.end(), '"'), value.end());
+    return value;
 }
 
 bool currentOutputIdForName(KokkosSession& session,
@@ -461,6 +472,24 @@ void writeRequestResults(std::ofstream& results,
     }
 }
 
+void writeRequestCheckpoint(std::ofstream& results,
+    std::shared_ptr<apex_tuning_request> request) {
+    apex::exhaustive::Checkpoint checkpoint;
+    if (!request->get_exhaustive_checkpoint(checkpoint)) { return; }
+    results << "  ExhaustiveState:" << std::endl;
+    results << "    Iteration: " << checkpoint.k << std::endl;
+    results << "    Cost: " << checkpoint.cost << std::endl;
+    results << "    BestCost: " << checkpoint.best_cost << std::endl;
+    results << "    NumVars: " << checkpoint.variables.size() << std::endl;
+    for (const auto& variable : checkpoint.variables) {
+        results << "    Variable: \"" << variable.first << "\"" << std::endl;
+        results << "    CurrentIndex: " << variable.second.current_index
+            << std::endl;
+        results << "    BestIndex: " << variable.second.best_index
+            << std::endl;
+    }
+}
+
 void KokkosSession::writeCache(void) {
     if(apex::apex_options::use_kokkos_tuning_cache_only()) { return; }
     //if(!saveCache) { return; }
@@ -504,6 +533,7 @@ void KokkosSession::writeCache(void) {
             (converged ? "true" : "false") << std::endl;
         if (!converged) {
             results << "  BestSoFar: true" << std::endl;
+            writeRequestCheckpoint(results, request);
         }
         writeRequestResults(results, req.first, request);
     }
@@ -609,6 +639,33 @@ void KokkosSession::parseVariableCache(std::ifstream& results) {
     */
 }
 
+apex::exhaustive::Checkpoint parseExhaustiveCheckpoint(
+    std::ifstream& results) {
+    apex::exhaustive::Checkpoint checkpoint;
+    std::string line;
+    if (!std::getline(results, line)) { return checkpoint; }
+    checkpoint.k = atol(cacheValue(line).c_str());
+    if (!std::getline(results, line)) { return checkpoint; }
+    checkpoint.cost = atof(cacheValue(line).c_str());
+    if (!std::getline(results, line)) { return checkpoint; }
+    checkpoint.best_cost = atof(cacheValue(line).c_str());
+    if (!std::getline(results, line)) { return checkpoint; }
+    size_t numvars = atol(cacheValue(line).c_str());
+    for (size_t i = 0 ; i < numvars ; i++) {
+        if (!std::getline(results, line)) { return checkpoint; }
+        std::string variable_name = cacheValue(line);
+        apex::exhaustive::VariableCheckpoint variable;
+        if (!std::getline(results, line)) { return checkpoint; }
+        variable.current_index = atol(cacheValue(line).c_str());
+        if (!std::getline(results, line)) { return checkpoint; }
+        variable.best_index = atol(cacheValue(line).c_str());
+        checkpoint.variables.insert(
+            std::make_pair(variable_name, variable));
+    }
+    checkpoint.valid = true;
+    return checkpoint;
+}
+
 void KokkosSession::parseContextCache(std::ifstream& results) {
     std::string line;
     std::string delimiter = ": ";
@@ -623,53 +680,66 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
     std::string converged = line.substr(line.find(delimiter)+2);
     const bool isConverged = converged.find("true") != std::string::npos;
     bool hasBestSoFar = false;
-    std::streampos beforeResults = results.tellg();
-    if (std::getline(results, line)) {
+    apex::exhaustive::Checkpoint checkpoint;
+    bool hasResults = false;
+    while (true) {
+        std::streampos beforeLine = results.tellg();
+        if (!std::getline(results, line)) { break; }
         if (line.find("BestSoFar", 0) != std::string::npos) {
             std::string bestSoFar = line.substr(line.find(delimiter)+2);
             hasBestSoFar = bestSoFar.find("true") != std::string::npos;
-            beforeResults = results.tellg();
-            std::getline(results, line);
+            continue;
+        }
+        if (line.find("ExhaustiveState", 0) != std::string::npos) {
+            checkpoint = parseExhaustiveCheckpoint(results);
+            continue;
         }
         if (line.find("Results", 0) == std::string::npos) {
-            results.seekg(beforeResults);
+            results.seekg(beforeLine);
             return;
         }
-        std::map<size_t, struct Kokkos_Tools_VariableValue> vars;
-        // NumVars
+        hasResults = true;
+        break;
+    }
+    if (!hasResults) { return; }
+    std::map<size_t, struct Kokkos_Tools_VariableValue> vars;
+    // NumVars
+    std::getline(results, line);
+    size_t numvars = atol(line.substr(line.find(delimiter)+2).c_str());
+    for (size_t i = 0 ; i < numvars ; i++) {
+        struct Kokkos_Tools_VariableValue var;
+        memset(&var, 0, sizeof(struct Kokkos_Tools_VariableValue));
+        // id
         std::getline(results, line);
-        size_t numvars = atol(line.substr(line.find(delimiter)+2).c_str());
-        for (size_t i = 0 ; i < numvars ; i++) {
-            struct Kokkos_Tools_VariableValue var;
-            memset(&var, 0, sizeof(struct Kokkos_Tools_VariableValue));
-            // id
-            std::getline(results, line);
-            size_t id = atol(line.substr(line.find(delimiter)+2).c_str());
-            var.type_id = id;
-            // value
-            std::getline(results, line);
-            std::string value = line.substr(line.find(delimiter)+2);
-            // get the variable name
-            auto cachedName = cachedVariableNames.find(id);
-            if (cachedName == cachedVariableNames.end()) { continue; }
-            std::string varName = cachedName->second;
-            // look it up in the cached variables
-            auto info = cachedVariables.find(varName);
-            if (info == cachedVariables.end()) { continue; }
-            if (info->second.type == kokkos_value_double) {
-                var.value.double_value = atof(value.c_str());
-            } else if (info->second.type == kokkos_value_int64) {
-                var.value.int_value = atol(value.c_str());
-            } else {
-                strcpy(var.value.string_value, value.c_str());
-            }
-            var.metadata = &(info->second);
-            vars.insert(std::make_pair(id, std::move(var)));
+        size_t id = atol(line.substr(line.find(delimiter)+2).c_str());
+        var.type_id = id;
+        // value
+        std::getline(results, line);
+        std::string value = line.substr(line.find(delimiter)+2);
+        // get the variable name
+        auto cachedName = cachedVariableNames.find(id);
+        if (cachedName == cachedVariableNames.end()) { continue; }
+        std::string varName = cachedName->second;
+        // look it up in the cached variables
+        auto info = cachedVariables.find(varName);
+        if (info == cachedVariables.end()) { continue; }
+        if (info->second.type == kokkos_value_double) {
+            var.value.double_value = atof(value.c_str());
+        } else if (info->second.type == kokkos_value_int64) {
+            var.value.int_value = atol(value.c_str());
+        } else {
+            strcpy(var.value.string_value, value.c_str());
         }
-        if (isConverged) {
-            cachedTunings.insert(std::make_pair(name, std::move(vars)));
-        } else if (hasBestSoFar) {
-            cachedBestSoFar.insert(std::make_pair(name, std::move(vars)));
+        var.metadata = &(info->second);
+        vars.insert(std::make_pair(id, std::move(var)));
+    }
+    if (isConverged) {
+        cachedTunings.insert(std::make_pair(name, std::move(vars)));
+    } else if (hasBestSoFar) {
+        cachedBestSoFar.insert(std::make_pair(name, std::move(vars)));
+        if (checkpoint.valid) {
+            cachedExhaustiveCheckpoints.insert(
+                std::make_pair(name, std::move(checkpoint)));
         }
     }
 }
@@ -1313,6 +1383,17 @@ bool handle_start(const std::string & name, const size_t vars,
                         session.outputs[id]->lstep);
                     //printf("Initial long value: %ld\n", tval); fflush(stdout);
                 }
+            }
+        }
+
+        auto checkpoint = session.cachedExhaustiveCheckpoints.find(name);
+        if (checkpoint != session.cachedExhaustiveCheckpoints.end() &&
+            request->get_strategy() == apex_ah_tuning_strategy::APEX_EXHAUSTIVE) {
+            request->set_exhaustive_checkpoint(checkpoint->second);
+            if (session.verbose) {
+                std::cout << std::string(getDepth(), ' ');
+                std::cout << "Resuming Kokkos exhaustive tuning checkpoint for "
+                    << name << std::endl;
             }
         }
 

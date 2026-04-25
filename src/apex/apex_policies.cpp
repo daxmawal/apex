@@ -72,6 +72,24 @@ static apex_tuning_session_handle create_session() {
   return result;
 }
 
+void apex_tuning_request::set_exhaustive_checkpoint(
+    const apex::exhaustive::Checkpoint& checkpoint) {
+    exhaustive_checkpoint = checkpoint;
+}
+
+bool apex_tuning_request::get_exhaustive_checkpoint(
+    apex::exhaustive::Checkpoint& checkpoint) const {
+    if (strategy != apex_ah_tuning_strategy::APEX_EXHAUSTIVE) {
+        return false;
+    }
+    auto tuning_session = get_session(tuning_session_handle);
+    if (!tuning_session) {
+        return false;
+    }
+    checkpoint = tuning_session->exhaustive_session.get_checkpoint();
+    return checkpoint.valid;
+}
+
 #ifdef APEX_HAVE_ACTIVEHARMONY
 static const char * library_for_strategy(apex_ah_tuning_strategy s) {
     switch(s) {
@@ -1789,7 +1807,10 @@ inline int __exhaustive_setup(shared_ptr<apex_tuning_session>
       }
   }
   /* request initial settings */
-  tuning_session->exhaustive_session.getNewSettings();
+  if (!tuning_session->exhaustive_session.restore_checkpoint(
+          request.exhaustive_checkpoint)) {
+      tuning_session->exhaustive_session.getNewSettings();
+  }
 
   return APEX_NOERROR;
 }
