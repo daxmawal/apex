@@ -13,6 +13,7 @@ endif(NOT APPLE)
 
 set(example_programs
     cache_replay
+    restart_replay
     simple
     two_var
     ${openmp_programs}

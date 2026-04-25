@@ -222,6 +222,7 @@ class apex_tuning_request {
         double radius;
         int aggregation_times;
         std::string aggregation_function;
+        apex::exhaustive::Checkpoint exhaustive_checkpoint;
 
     public:
         apex_tuning_request(const std::string & name, std::function<double()>
@@ -308,6 +309,12 @@ class apex_tuning_request {
         void get_best_values() {
             return apex::get_best_values(tuning_session_handle);
         }
+
+        void set_exhaustive_checkpoint(
+            const apex::exhaustive::Checkpoint& checkpoint);
+
+        bool get_exhaustive_checkpoint(
+            apex::exhaustive::Checkpoint& checkpoint) const;
 
         apex_tuning_session_handle get_session_handle() const {
             return tuning_session_handle;
@@ -418,4 +425,3 @@ struct apex_tuning_session {
 
     apex_tuning_session(apex_tuning_session_handle h) : id{h} {};
 };
-
