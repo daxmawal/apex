@@ -1937,6 +1937,7 @@ inline int __common_setup_custom_tuning(shared_ptr<apex_tuning_session>
     tuning_session, apex_tuning_request & request) {
     __read_common_variables(tuning_session);
     int status = APEX_NOERROR;
+    tuning_session->strategy = request.strategy;
     // if using the simulated annealing strategy, don't use AH!
     if (request.strategy == apex_ah_tuning_strategy::SIMULATED_ANNEALING) {
         status = __sa_setup(tuning_session, request);
@@ -2212,7 +2213,29 @@ APEX_EXPORT bool has_session_converged(apex_tuning_session_handle h) {
 APEX_EXPORT void get_best_values(apex_tuning_session_handle h) {
     if (apex_options::disable() == true) { return; }
     auto tuning_session = get_session(h);
-    if(tuning_session && tuning_session->htask != nullptr) {
+    if(!tuning_session) {
+        return;
+    }
+    switch(tuning_session->strategy) {
+        case apex_ah_tuning_strategy::SIMULATED_ANNEALING:
+            tuning_session->sa_session.saveBestSettings();
+            return;
+        case apex_ah_tuning_strategy::NELDER_MEAD_INTERNAL:
+            tuning_session->nelder_mead_session.saveBestSettings();
+            return;
+        case apex_ah_tuning_strategy::GENETIC_SEARCH:
+            tuning_session->genetic_session.saveBestSettings();
+            return;
+        case apex_ah_tuning_strategy::APEX_EXHAUSTIVE:
+            tuning_session->exhaustive_session.saveBestSettings();
+            return;
+        case apex_ah_tuning_strategy::APEX_RANDOM:
+            tuning_session->random_session.saveBestSettings();
+            return;
+        default:
+            break;
+    }
+    if(tuning_session->htask != nullptr) {
 #ifdef APEX_HAVE_ACTIVEHARMONY
         ah_best(tuning_session->htask);
 #endif
@@ -2278,4 +2301,3 @@ APEX_EXPORT void apex_set_thread_cap(int new_cap) {
 }
 
 } // extern "C"
-

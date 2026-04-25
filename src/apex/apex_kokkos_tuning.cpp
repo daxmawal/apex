@@ -326,6 +326,7 @@ public:
     // map from cached variable names to cached variable IDs
     std::map<std::string, size_t> cachedVariableIDs;
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedTunings;
+    std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedBestSoFar;
     int saved_node_id;
 };
 
@@ -392,8 +393,75 @@ std::string strategy_to_string(std::shared_ptr<apex_tuning_request> request) {
     return "unknown?";
 }
 
+bool currentOutputIdForName(KokkosSession& session,
+    const std::string& name, size_t& id) {
+    for (const auto& output : session.outputs) {
+        if (output.second != nullptr && output.second->name == name) {
+            id = output.first;
+            return true;
+        }
+    }
+    return false;
+}
+
+void writeCachedResults(std::ofstream& results, KokkosSession& session,
+    const std::map<size_t, struct Kokkos_Tools_VariableValue>& values) {
+    std::vector<std::pair<size_t, const struct Kokkos_Tools_VariableValue*>>
+        writable;
+    for (const auto& cachedVar : values) {
+        auto cachedName = session.cachedVariableNames.find(cachedVar.first);
+        if (cachedName == session.cachedVariableNames.end()) { continue; }
+        size_t currentId = 0;
+        if (!currentOutputIdForName(session, cachedName->second, currentId)) {
+            continue;
+        }
+        writable.push_back(std::make_pair(currentId, &(cachedVar.second)));
+    }
+    results << "  Results:" << std::endl;
+    results << "    NumVars: " << writable.size() << std::endl;
+    for (const auto& value : writable) {
+        results << "    id: " << value.first << std::endl;
+        if (value.second->metadata->type == kokkos_value_double) {
+            results << "    value: " << value.second->value.double_value
+                << std::endl;
+        } else if (value.second->metadata->type == kokkos_value_int64) {
+            results << "    value: " << value.second->value.int_value
+                << std::endl;
+        } else {
+            results << "    value: " << value.second->value.string_value
+                << std::endl;
+        }
+    }
+}
+
+void writeRequestResults(std::ofstream& results,
+    const std::string& name, std::shared_ptr<apex_tuning_request> request) {
+    KokkosSession& session = KokkosSession::getSession();
+    request->get_best_values();
+    results << "  Results:" << std::endl;
+    results << "    NumVars: " << session.var_ids[name].size() << std::endl;
+    for (const auto &id : session.var_ids[name]) {
+        results << "    id: " << id << std::endl;
+        Variable* var{session.outputs[id]};
+        if (var->info.valueQuantity == kokkos_value_set) {
+            auto param = std::static_pointer_cast<apex_param_enum>(
+                request->get_param(var->name));
+            results << "    value: " << param->get_value() << std::endl;
+        } else if (var->info.valueQuantity == kokkos_value_range) {
+            if (var->info.type == kokkos_value_double) {
+                auto param = std::static_pointer_cast<apex_param_double>(
+                    request->get_param(var->name));
+                results << "    value: " << param->get_value() << std::endl;
+            } else if (var->info.type == kokkos_value_int64) {
+                auto param = std::static_pointer_cast<apex_param_long>(
+                    request->get_param(var->name));
+                results << "    value: " << param->get_value() << std::endl;
+            }
+        }
+    }
+}
+
 void KokkosSession::writeCache(void) {
-    if(use_history) { return; }
     if(apex::apex_options::use_kokkos_tuning_cache_only()) { return; }
     //if(!saveCache) { return; }
     // did the user specify a file?
@@ -417,9 +485,11 @@ void KokkosSession::writeCache(void) {
         results << v->toString();
     }
     size_t count = 0;
+    std::set<std::string> writtenContexts;
     for (const auto &req : requests) {
         results << "Context_" << count++ << ":" << std::endl;
         results << "  Name: \"" << req.first << "\"" << std::endl;
+        writtenContexts.insert(req.first);
         std::shared_ptr<apex_tuning_request> request = req.second;
         // always write the random search out
         bool converged = request->has_converged() ||
@@ -432,30 +502,29 @@ void KokkosSession::writeCache(void) {
         results << "\"" << std::endl;
         results << "  Converged: " <<
             (converged ? "true" : "false") << std::endl;
-        if (converged) {
-            results << "  Results:" << std::endl;
-            results << "    NumVars: " << var_ids[req.first].size() << std::endl;
-            for (const auto &id : var_ids[req.first]) {
-                results << "    id: " << id << std::endl;
-                Variable* var{KokkosSession::getSession().outputs[id]};
-                if (var->info.valueQuantity == kokkos_value_set) {
-                    auto param = std::static_pointer_cast<apex_param_enum>(
-                        request->get_param(var->name));
-                    results << "    value: " << param->get_value() << std::endl;
-                } else if (var->info.valueQuantity == kokkos_value_range) {
-                    if (var->info.type == kokkos_value_double) {
-                        auto param = std::static_pointer_cast<apex_param_double>(
-                            request->get_param(var->name));
-                        results << "    value: " << param->get_value() << std::endl;
-                    } else if (var->info.type == kokkos_value_int64) {
-                        auto param = std::static_pointer_cast<apex_param_long>(
-                            request->get_param(var->name));
-                        results << "    value: " << param->get_value() << std::endl;
-                    }
-                }
-            }
+        if (!converged) {
+            results << "  BestSoFar: true" << std::endl;
         }
-        // if not converged, need to get the "best so far" values for the parameters.
+        writeRequestResults(results, req.first, request);
+    }
+    for (const auto& cached : cachedTunings) {
+        if (writtenContexts.count(cached.first) > 0) { continue; }
+        results << "Context_" << count++ << ":" << std::endl;
+        results << "  Name: \"" << cached.first << "\"" << std::endl;
+        results << "  Strategy: \"cached\"" << std::endl;
+        results << "  Converged: true" << std::endl;
+        writeCachedResults(results, *this, cached.second);
+        writtenContexts.insert(cached.first);
+    }
+    for (const auto& cached : cachedBestSoFar) {
+        if (writtenContexts.count(cached.first) > 0) { continue; }
+        results << "Context_" << count++ << ":" << std::endl;
+        results << "  Name: \"" << cached.first << "\"" << std::endl;
+        results << "  Strategy: \"cached\"" << std::endl;
+        results << "  Converged: false" << std::endl;
+        results << "  BestSoFar: true" << std::endl;
+        writeCachedResults(results, *this, cached.second);
+        writtenContexts.insert(cached.first);
     }
     results.close();
 }
@@ -552,10 +621,21 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
     // converged?
     std::getline(results, line);
     std::string converged = line.substr(line.find(delimiter)+2);
-    if (converged.find("true") != std::string::npos) {
+    const bool isConverged = converged.find("true") != std::string::npos;
+    bool hasBestSoFar = false;
+    std::streampos beforeResults = results.tellg();
+    if (std::getline(results, line)) {
+        if (line.find("BestSoFar", 0) != std::string::npos) {
+            std::string bestSoFar = line.substr(line.find(delimiter)+2);
+            hasBestSoFar = bestSoFar.find("true") != std::string::npos;
+            beforeResults = results.tellg();
+            std::getline(results, line);
+        }
+        if (line.find("Results", 0) == std::string::npos) {
+            results.seekg(beforeResults);
+            return;
+        }
         std::map<size_t, struct Kokkos_Tools_VariableValue> vars;
-        // Results
-        std::getline(results, line);
         // NumVars
         std::getline(results, line);
         size_t numvars = atol(line.substr(line.find(delimiter)+2).c_str());
@@ -570,9 +650,12 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
             std::getline(results, line);
             std::string value = line.substr(line.find(delimiter)+2);
             // get the variable name
-            std::string varName = cachedVariableNames.find(id)->second;
+            auto cachedName = cachedVariableNames.find(id);
+            if (cachedName == cachedVariableNames.end()) { continue; }
+            std::string varName = cachedName->second;
             // look it up in the cached variables
             auto info = cachedVariables.find(varName);
+            if (info == cachedVariables.end()) { continue; }
             if (info->second.type == kokkos_value_double) {
                 var.value.double_value = atof(value.c_str());
             } else if (info->second.type == kokkos_value_int64) {
@@ -583,7 +666,11 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
             var.metadata = &(info->second);
             vars.insert(std::make_pair(id, std::move(var)));
         }
-        cachedTunings.insert(std::make_pair(name, std::move(vars)));
+        if (isConverged) {
+            cachedTunings.insert(std::make_pair(name, std::move(vars)));
+        } else if (hasBestSoFar) {
+            cachedBestSoFar.insert(std::make_pair(name, std::move(vars)));
+        }
     }
 }
 
@@ -910,13 +997,16 @@ void printTuning(const size_t numVars, Kokkos_Tools_VariableValue* values,
     std::cout << std::endl;
 }
 
-bool getCachedTunings(std::string name,
+bool applyCachedValues(std::string name,
+    const std::map<std::string,
+        std::map<size_t, struct Kokkos_Tools_VariableValue> >& cache,
     const size_t vars,
-    Kokkos_Tools_VariableValue* values) {
+    Kokkos_Tools_VariableValue* values,
+    bool sample) {
     KokkosSession& session = KokkosSession::getSession();
-    auto result = session.cachedTunings.find(name);
+    auto result = cache.find(name);
     // don't have a tuning for this context?
-    if (result == session.cachedTunings.end()) { return false; }
+    if (result == cache.end()) { return false; }
     std::map<std::string, const struct Kokkos_Tools_VariableValue*> cachedByName;
     for (const auto &cachedVar : result->second) {
         auto cachedName = session.cachedVariableNames.find(cachedVar.first);
@@ -939,17 +1029,35 @@ bool getCachedTunings(std::string name,
         const auto& var = *(variter->second);
         if (var.metadata->type == kokkos_value_double) {
             values[i].value.double_value = var.value.double_value;
-            std::string tmp(name+":"+varname);
-            apex::sample_value(tmp, var.value.double_value);
+            if (sample) {
+                std::string tmp(name+":"+varname);
+                apex::sample_value(tmp, var.value.double_value);
+            }
         } else if (var.metadata->type == kokkos_value_int64) {
             values[i].value.int_value = var.value.int_value;
-            std::string tmp(name+":"+varname);
-            apex::sample_value(tmp, var.value.int_value);
+            if (sample) {
+                std::string tmp(name+":"+varname);
+                apex::sample_value(tmp, var.value.int_value);
+            }
         } else if (var.metadata->type == kokkos_value_string) {
             strncpy(values[i].value.string_value, var.value.string_value, KOKKOS_TOOLS_TUNING_STRING_LENGTH);
         }
     }
     return true;
+}
+
+bool getCachedTunings(std::string name,
+    const size_t vars,
+    Kokkos_Tools_VariableValue* values) {
+    KokkosSession& session = KokkosSession::getSession();
+    return applyCachedValues(name, session.cachedTunings, vars, values, true);
+}
+
+bool getCachedBestSoFar(std::string name,
+    const size_t vars,
+    Kokkos_Tools_VariableValue* values) {
+    KokkosSession& session = KokkosSession::getSession();
+    return applyCachedValues(name, session.cachedBestSoFar, vars, values, false);
 }
 
 bool context_variable_matches(const std::string& context_key,
@@ -1391,6 +1499,14 @@ void kokkosp_request_values(
             std::cout << "No cached Kokkos tuning for " << name << std::endl;
         }
     } else {
+        if (session.use_history &&
+            getCachedBestSoFar(name, numTuningVariables,
+                tuningVariableValues) &&
+            session.verbose) {
+            std::cout << std::string(getDepth(), ' ');
+            std::cout << "Starting Kokkos tuning from cached best-so-far for "
+                << name << std::endl;
+        }
         uint64_t delta = 0;
         bool converged = false;
         if (handle_start(name, numTuningVariables, tuningVariableValues, delta, converged)) {

@@ -81,6 +81,17 @@ Context_1:
   Converged: true
   Results:
     NumVars: 0
+Context_2:
+  Name: "[cache_replay.a_input:2,cache_replay.b_input:2,tree_node:cache_replay_context]"
+  Strategy: "exhaustive"
+  Converged: false
+  BestSoFar: true
+  Results:
+    NumVars: 2
+    id: 300
+    value: 20
+    id: 400
+    value: 20
 )";
 
 struct IntSetInfo {
@@ -268,6 +279,12 @@ int main() {
     if (apex_kokkos_kernel_converged("unknown_kernel")) {
         return report_failure(
             "Cache replay test reported an unknown kernel as converged.",
+            output, cache_file);
+    }
+    if (apex_kokkos_tuning_context_converged(
+        "[cache_replay.a_input:2,cache_replay.b_input:2,tree_node:cache_replay_context]")) {
+        return report_failure(
+            "Cache replay test reported a best-so-far context as converged.",
             output, cache_file);
     }
 
