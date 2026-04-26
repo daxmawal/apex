@@ -523,6 +523,7 @@ void writeExhaustiveCheckpoint(std::ofstream& results,
     if (!checkpoint.valid) { return; }
     results << "  ExhaustiveState:" << std::endl;
     results << "    Iteration: " << checkpoint.k << std::endl;
+    results << "    MaxIterations: " << checkpoint.kmax << std::endl;
     results << "    Cost: " << checkpoint.cost << std::endl;
     results << "    BestCost: " << checkpoint.best_cost << std::endl;
     results << "    NumVars: " << checkpoint.variables.size() << std::endl;
@@ -532,6 +533,10 @@ void writeExhaustiveCheckpoint(std::ofstream& results,
             << std::endl;
         results << "    BestIndex: " << variable.second.best_index
             << std::endl;
+        results << "    CandidateCount: " << variable.second.candidate_count
+            << std::endl;
+        results << "    CandidateHash: \"" << variable.second.candidate_hash
+            << "\"" << std::endl;
     }
 }
 
@@ -798,6 +803,10 @@ apex::exhaustive::Checkpoint parseExhaustiveCheckpoint(
     if (!std::getline(results, line)) { return checkpoint; }
     checkpoint.k = atol(cacheValue(line).c_str());
     if (!std::getline(results, line)) { return checkpoint; }
+    if (line.find("MaxIterations", 0) != std::string::npos) {
+        checkpoint.kmax = atol(cacheValue(line).c_str());
+        if (!std::getline(results, line)) { return checkpoint; }
+    }
     checkpoint.cost = atof(cacheValue(line).c_str());
     if (!std::getline(results, line)) { return checkpoint; }
     checkpoint.best_cost = atof(cacheValue(line).c_str());
@@ -811,6 +820,22 @@ apex::exhaustive::Checkpoint parseExhaustiveCheckpoint(
         variable.current_index = atol(cacheValue(line).c_str());
         if (!std::getline(results, line)) { return checkpoint; }
         variable.best_index = atol(cacheValue(line).c_str());
+        std::streampos beforeLine = results.tellg();
+        if (std::getline(results, line)) {
+            if (line.find("CandidateCount", 0) != std::string::npos) {
+                variable.candidate_count = atol(cacheValue(line).c_str());
+                beforeLine = results.tellg();
+                if (std::getline(results, line)) {
+                    if (line.find("CandidateHash", 0) != std::string::npos) {
+                        variable.candidate_hash = cacheValue(line);
+                    } else {
+                        results.seekg(beforeLine);
+                    }
+                }
+            } else {
+                results.seekg(beforeLine);
+            }
+        }
         checkpoint.variables.insert(
             std::make_pair(variable_name, variable));
     }

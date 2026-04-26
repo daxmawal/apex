@@ -82,6 +82,12 @@ int fail(const std::string& message) {
     return 1;
 }
 
+bool write_file(const std::string& path, const std::string& contents) {
+    std::ofstream output(path);
+    output << contents;
+    return output.good();
+}
+
 void configure_apex(const std::string& cache_file, bool cache_only) {
     setenv("APEX_KOKKOS_TUNING", cache_only ? "0" : "1", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE_ONLY", cache_only ? "1" : "0", 1);
@@ -113,7 +119,7 @@ Variables declare_variables(IntSetInfo& input_info, IntSetInfo& output_a_info,
 }
 
 int run_tuning_child(const std::string& cache_file, const std::string& log_file,
-    int iterations) {
+    int iterations, bool incompatible_space = false) {
     configure_apex(cache_file, false);
     kokkosp_init_library(0, KOKKOSP_INTERFACE_VERSION, 0, nullptr);
 
@@ -122,7 +128,9 @@ int run_tuning_child(const std::string& cache_file, const std::string& log_file,
 
     IntSetInfo input_info({7});
     IntSetInfo output_a_info({0, 1, 2});
-    IntSetInfo output_b_info({0, 1, 2, 3});
+    IntSetInfo output_b_info(
+        incompatible_space ? std::initializer_list<int64_t>{0, 1, 2, 3, 4} :
+            std::initializer_list<int64_t>{0, 1, 2, 3});
     Variables vars = declare_variables(input_info, output_a_info,
         output_b_info);
 
@@ -259,13 +267,18 @@ int run_driver(const char* argv0) {
     std::stringstream base;
     base << "/tmp/apex_kokkos_restart_replay_" << getpid();
     const std::string cache_file = base.str() + ".yaml";
+    const std::string incompatible_cache_file =
+        base.str() + ".incompatible.yaml";
     const std::string run1_log = base.str() + ".run1";
     const std::string run2_log = base.str() + ".run2";
+    const std::string incompatible_log = base.str() + ".incompatible";
     const std::string executable = executable_path(argv0);
 
     unlink(cache_file.c_str());
+    unlink(incompatible_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
+    unlink(incompatible_log.c_str());
 
     int status = run_child(executable, "run1", cache_file, run1_log);
     if (status != 0) { return status; }
@@ -274,12 +287,27 @@ int run_driver(const char* argv0) {
     if (run1_cache.find("Status: \"in_progress\"") == std::string::npos ||
         run1_cache.find("Converged: false") == std::string::npos ||
         run1_cache.find("BestSoFar: true") == std::string::npos ||
-        run1_cache.find("ExhaustiveState:") == std::string::npos) {
+        run1_cache.find("ExhaustiveState:") == std::string::npos ||
+        run1_cache.find("MaxIterations:") == std::string::npos ||
+        run1_cache.find("CandidateCount:") == std::string::npos ||
+        run1_cache.find("CandidateHash:") == std::string::npos) {
         return fail("Run 1 did not write a partial exhaustive checkpoint.");
     }
 
     status = run_child(executable, "cache-only", cache_file);
     if (status != 0) { return status; }
+
+    if (!write_file(incompatible_cache_file, run1_cache)) {
+        return fail("Could not create incompatible cache copy.");
+    }
+    status = run_child(executable, "run-incompatible",
+        incompatible_cache_file, incompatible_log);
+    if (status != 0) { return status; }
+    const std::string incompatible_run = slurp(incompatible_log);
+    if (incompatible_run.compare(0, 4, "0,0\n") != 0) {
+        return fail("Incompatible exhaustive checkpoint was restored instead "
+            "of restarting from the beginning.");
+    }
 
     status = run_child(executable, "run2", cache_file, run2_log);
     if (status != 0) { return status; }
@@ -294,8 +322,10 @@ int run_driver(const char* argv0) {
     }
 
     unlink(cache_file.c_str());
+    unlink(incompatible_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
+    unlink(incompatible_log.c_str());
     return 0;
 }
 
@@ -311,6 +341,12 @@ int main(int argc, char* argv[]) {
         if (mode == "run2") {
             if (argc != 4) { return fail("run2 requires cache and log paths"); }
             return run_tuning_child(argv[2], argv[3], 4);
+        }
+        if (mode == "run-incompatible") {
+            if (argc != 4) {
+                return fail("run-incompatible requires cache and log paths");
+            }
+            return run_tuning_child(argv[2], argv[3], 1, true);
         }
         if (mode == "cache-only") {
             if (argc != 3) { return fail("cache-only requires a cache path"); }

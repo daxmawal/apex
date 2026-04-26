@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <random>
+#include <sstream>
 #include <limits>
 #include <map>
 #include "apex_types.h"
@@ -20,15 +22,32 @@ enum class VariableType { doubletype, longtype, stringtype } ;
 struct VariableCheckpoint {
     size_t current_index = 0;
     size_t best_index = 0;
+    size_t candidate_count = 0;
+    std::string candidate_hash;
 };
 
 struct Checkpoint {
     bool valid = false;
     size_t k = 1;
+    size_t kmax = 0;
     double cost = std::numeric_limits<double>::max();
     double best_cost = std::numeric_limits<double>::max();
     std::map<std::string, VariableCheckpoint> variables;
 };
+
+inline void hash_append(uint64_t& hash, const std::string& value) {
+    const uint64_t prime = 1099511628211ULL;
+    for (char c : value) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= prime;
+    }
+}
+
+inline std::string hash_to_string(uint64_t hash) {
+    std::stringstream ss;
+    ss << "fnv1a64:" << std::hex << hash;
+    return ss.str();
+}
 
 class Variable {
 public:
@@ -93,6 +112,43 @@ public:
         return svalues[current_index];
         //}
     }
+    size_t candidate_count() const {
+        if (vtype == VariableType::doubletype) {
+            return dvalues.size();
+        }
+        if (vtype == VariableType::longtype) {
+            return lvalues.size();
+        }
+        return svalues.size();
+    }
+    std::string candidate_hash() const {
+        uint64_t hash = 14695981039346656037ULL;
+        if (vtype == VariableType::doubletype) {
+            hash_append(hash, "double:");
+            for (double value : dvalues) {
+                std::stringstream ss;
+                ss << std::setprecision(
+                    std::numeric_limits<double>::max_digits10) << value;
+                hash_append(hash, ss.str());
+                hash_append(hash, ";");
+            }
+        } else if (vtype == VariableType::longtype) {
+            hash_append(hash, "long:");
+            for (long value : lvalues) {
+                hash_append(hash, std::to_string(value));
+                hash_append(hash, ";");
+            }
+        } else {
+            hash_append(hash, "string:");
+            for (const std::string& value : svalues) {
+                hash_append(hash, std::to_string(value.size()));
+                hash_append(hash, ":");
+                hash_append(hash, value);
+                hash_append(hash, ";");
+            }
+        }
+        return hash_to_string(hash);
+    }
 };
 
 class Exhaustive {
@@ -129,12 +185,15 @@ public:
         Checkpoint checkpoint;
         checkpoint.valid = true;
         checkpoint.k = k;
+        checkpoint.kmax = kmax;
         checkpoint.cost = cost;
         checkpoint.best_cost = best_cost;
         for (const auto& v : vars) {
             VariableCheckpoint variable;
             variable.current_index = v.second.current_index;
             variable.best_index = v.second.best_index;
+            variable.candidate_count = v.second.candidate_count();
+            variable.candidate_hash = v.second.candidate_hash();
             checkpoint.variables.insert(std::make_pair(v.first, variable));
         }
         return checkpoint;
@@ -142,11 +201,22 @@ public:
     bool restore_checkpoint(const Checkpoint& checkpoint) {
         if (!checkpoint.valid) { return false; }
         if (checkpoint.variables.size() != vars.size()) { return false; }
+        if (checkpoint.kmax != 0 && checkpoint.kmax != kmax) { return false; }
         for (const auto& checkpoint_var : checkpoint.variables) {
             auto var = vars.find(checkpoint_var.first);
             if (var == vars.end()) { return false; }
             if (checkpoint_var.second.current_index > var->second.max_index ||
                 checkpoint_var.second.best_index > var->second.max_index) {
+                return false;
+            }
+            if (checkpoint_var.second.candidate_count != 0 &&
+                checkpoint_var.second.candidate_count !=
+                    var->second.candidate_count()) {
+                return false;
+            }
+            if (!checkpoint_var.second.candidate_hash.empty() &&
+                checkpoint_var.second.candidate_hash !=
+                    var->second.candidate_hash()) {
                 return false;
             }
         }
