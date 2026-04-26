@@ -66,6 +66,10 @@ if ((NOT PAPI_FOUND) AND (NOT OTF2_FOUND))
     set(example_programs "${example_programs};apex_pthread_flood")
 endif()
 
+if (NOT APEX_WITH_KOKKOS)
+    set(example_programs "${example_programs};apex_kokkos_tuning_no_kokkos")
+endif()
+
 # std::threads crash when linked statically. :(
 if (NOT BUILD_STATIC_EXECUTABLES)
 # Intel can't do std::futures (std::__once_callable)
