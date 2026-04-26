@@ -296,10 +296,24 @@ int main() {
             "Cache replay test did not report the exact cached context as converged.",
             output, cache_file);
     }
+    if (apex_kokkos_tuning_context_status(
+        "[cache_replay.a_input:1,cache_replay.b_input:2,tree_node:cache_replay_context]") !=
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+        return report_failure(
+            "Cache replay test did not report converged status for exact cached context.",
+            output, cache_file);
+    }
     if (!apex_kokkos_tuning_context_variable_converged(
         "kokkos.kernel_name", "cache_replay_kernel")) {
         return report_failure(
             "Cache replay test did not report the cached kernel context as converged.",
+            output, cache_file);
+    }
+    if (apex_kokkos_tuning_context_variable_status(
+        "kokkos.kernel_name", "cache_replay_kernel") !=
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+        return report_failure(
+            "Cache replay test did not report converged status for cached kernel context.",
             output, cache_file);
     }
     if (!apex_kokkos_kernel_converged("cache_replay_kernel")) {
@@ -307,15 +321,34 @@ int main() {
             "Cache replay test did not report the cached kernel as converged.",
             output, cache_file);
     }
+    if (apex_kokkos_kernel_status("cache_replay_kernel") !=
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+        return report_failure(
+            "Cache replay test did not report converged kernel status.",
+            output, cache_file);
+    }
     if (apex_kokkos_kernel_converged("unknown_kernel")) {
         return report_failure(
             "Cache replay test reported an unknown kernel as converged.",
+            output, cache_file);
+    }
+    if (apex_kokkos_kernel_status("unknown_kernel") !=
+        APEX_KOKKOS_TUNING_STATUS_UNKNOWN) {
+        return report_failure(
+            "Cache replay test did not report unknown kernel status.",
             output, cache_file);
     }
     if (apex_kokkos_tuning_context_converged(
         "[cache_replay.a_input:2,cache_replay.b_input:2,tree_node:cache_replay_context]")) {
         return report_failure(
             "Cache replay test reported a best-so-far context as converged.",
+            output, cache_file);
+    }
+    if (apex_kokkos_tuning_context_status(
+        "[cache_replay.a_input:2,cache_replay.b_input:2,tree_node:cache_replay_context]") !=
+        APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR) {
+        return report_failure(
+            "Cache replay test did not report best-so-far status.",
             output, cache_file);
     }
 

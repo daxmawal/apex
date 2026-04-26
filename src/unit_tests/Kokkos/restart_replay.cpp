@@ -162,6 +162,10 @@ int run_tuning_child(const std::string& cache_file, const std::string& log_file,
     if (apex_kokkos_tuning_context_converged(kContextKey)) {
         return fail("Partial exhaustive context was reported as converged.");
     }
+    if (apex_kokkos_tuning_context_status(kContextKey) !=
+        APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS) {
+        return fail("Partial exhaustive context did not report in-progress status.");
+    }
 
     apex_stop(profiler);
     kokkosp_finalize_library();
@@ -203,6 +207,10 @@ int run_cache_only_child(const std::string& cache_file) {
     }
     if (apex_kokkos_tuning_context_converged(kContextKey)) {
         return fail("Cached best-so-far context was reported as converged.");
+    }
+    if (apex_kokkos_tuning_context_status(kContextKey) !=
+        APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS) {
+        return fail("Cached partial context did not report in-progress status.");
     }
 
     apex_stop(profiler);

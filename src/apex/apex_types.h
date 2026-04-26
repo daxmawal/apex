@@ -104,6 +104,17 @@ typedef enum _thread_state {
 } apex_thread_state;
 
 /**
+ * Typedef for Kokkos Tools tuning cache/search status.
+ */
+typedef enum _apex_kokkos_tuning_status {
+    APEX_KOKKOS_TUNING_STATUS_UNKNOWN = 0,
+    APEX_KOKKOS_TUNING_STATUS_CONVERGED,
+    APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS,
+    APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR,
+    APEX_KOKKOS_TUNING_STATUS_INVALID
+} apex_kokkos_tuning_status;
+
+/**
  * Typedef for enumerating the different optimization strategies
  * for throttling.
  */

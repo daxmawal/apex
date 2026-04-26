@@ -450,6 +450,20 @@ CachedContextStatus parse_status(const std::string& value) {
     return CachedContextStatus::invalid;
 }
 
+apex_kokkos_tuning_status public_status(CachedContextStatus status) {
+    switch (status) {
+        case CachedContextStatus::converged:
+            return APEX_KOKKOS_TUNING_STATUS_CONVERGED;
+        case CachedContextStatus::in_progress:
+            return APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS;
+        case CachedContextStatus::best_so_far:
+            return APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR;
+        case CachedContextStatus::invalid:
+            return APEX_KOKKOS_TUNING_STATUS_INVALID;
+    }
+    return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+}
+
 bool currentOutputIdForName(KokkosSession& session,
     const std::string& name, size_t& id) {
     for (const auto& output : session.outputs) {
@@ -1357,41 +1371,89 @@ bool context_variable_matches(const std::string& context_key,
     return false;
 }
 
-bool kokkos_tuning_context_converged(const std::string& context_key) {
-    if (!kokkos_tuning_hooks_enabled()) { return false; }
-    apex::in_apex prevent_memory_tracking;
-    KokkosSession& session = KokkosSession::getSession();
-    session.checkForCache();
-    auto cached = session.cachedTunings.find(context_key);
-    if (cached != session.cachedTunings.end()) { return true; }
-    auto active = session.requests.find(context_key);
-    if (active == session.requests.end() || active->second == nullptr) {
-        return false;
+apex_kokkos_tuning_status merge_status(apex_kokkos_tuning_status current,
+    apex_kokkos_tuning_status candidate) {
+    if (candidate == APEX_KOKKOS_TUNING_STATUS_CONVERGED ||
+        current == APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+        return APEX_KOKKOS_TUNING_STATUS_CONVERGED;
     }
-    return active->second->has_converged();
+    if (candidate == APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS ||
+        current == APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS) {
+        return APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS;
+    }
+    if (candidate == APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR ||
+        current == APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR) {
+        return APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR;
+    }
+    if (candidate == APEX_KOKKOS_TUNING_STATUS_INVALID ||
+        current == APEX_KOKKOS_TUNING_STATUS_INVALID) {
+        return APEX_KOKKOS_TUNING_STATUS_INVALID;
+    }
+    return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
 }
 
-bool kokkos_tuning_context_variable_converged(
-    const std::string& variable_name, const std::string& variable_value) {
-    if (!kokkos_tuning_hooks_enabled()) { return false; }
+apex_kokkos_tuning_status kokkos_tuning_context_status(
+    const std::string& context_key) {
+    if (!kokkos_tuning_hooks_enabled()) {
+        return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    }
     apex::in_apex prevent_memory_tracking;
     KokkosSession& session = KokkosSession::getSession();
     session.checkForCache();
-    for (const auto& cached : session.cachedTunings) {
+    auto active = session.requests.find(context_key);
+    if (active != session.requests.end() && active->second != nullptr) {
+        return active->second->has_converged() ?
+            APEX_KOKKOS_TUNING_STATUS_CONVERGED :
+            APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS;
+    }
+    auto cachedStatus = session.cachedContextStatus.find(context_key);
+    if (cachedStatus != session.cachedContextStatus.end()) {
+        return public_status(cachedStatus->second);
+    }
+    auto cached = session.cachedTunings.find(context_key);
+    if (cached != session.cachedTunings.end()) {
+        return APEX_KOKKOS_TUNING_STATUS_CONVERGED;
+    }
+    return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+}
+
+bool kokkos_tuning_context_converged(const std::string& context_key) {
+    return kokkos_tuning_context_status(context_key) ==
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED;
+}
+
+apex_kokkos_tuning_status kokkos_tuning_context_variable_status(
+    const std::string& variable_name, const std::string& variable_value) {
+    if (!kokkos_tuning_hooks_enabled()) {
+        return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    }
+    apex::in_apex prevent_memory_tracking;
+    KokkosSession& session = KokkosSession::getSession();
+    session.checkForCache();
+    apex_kokkos_tuning_status status = APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    for (const auto& cached : session.cachedContextStatus) {
         if (context_variable_matches(cached.first, variable_name,
             variable_value)) {
-            return true;
+            status = merge_status(status, public_status(cached.second));
         }
     }
     for (const auto& request : session.requests) {
         if (request.second != nullptr &&
-            request.second->has_converged() &&
             context_variable_matches(request.first, variable_name,
             variable_value)) {
-            return true;
+            status = merge_status(status,
+                request.second->has_converged() ?
+                    APEX_KOKKOS_TUNING_STATUS_CONVERGED :
+                    APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS);
         }
     }
-    return false;
+    return status;
+}
+
+bool kokkos_tuning_context_variable_converged(
+    const std::string& variable_name, const std::string& variable_value) {
+    return kokkos_tuning_context_variable_status(variable_name,
+        variable_value) == APEX_KOKKOS_TUNING_STATUS_CONVERGED;
 }
 
 void set_params(std::shared_ptr<apex_tuning_request> request,
@@ -1651,10 +1713,29 @@ extern "C" {
  *
  */
 
+APEX_EXPORT apex_kokkos_tuning_status apex_kokkos_tuning_context_status(
+    const char* context_key) {
+    if (context_key == nullptr) {
+        return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    }
+    return kokkos_tuning_context_status(std::string(context_key));
+}
+
 APEX_EXPORT bool apex_kokkos_tuning_context_converged(
     const char* context_key) {
     if (context_key == nullptr) { return false; }
-    return kokkos_tuning_context_converged(std::string(context_key));
+    return apex_kokkos_tuning_context_status(context_key) ==
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED;
+}
+
+APEX_EXPORT apex_kokkos_tuning_status
+apex_kokkos_tuning_context_variable_status(
+    const char* variable_name, const char* variable_value) {
+    if (variable_name == nullptr || variable_value == nullptr) {
+        return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    }
+    return kokkos_tuning_context_variable_status(
+        std::string(variable_name), std::string(variable_value));
 }
 
 APEX_EXPORT bool apex_kokkos_tuning_context_variable_converged(
@@ -1662,14 +1743,23 @@ APEX_EXPORT bool apex_kokkos_tuning_context_variable_converged(
     if (variable_name == nullptr || variable_value == nullptr) {
         return false;
     }
-    return kokkos_tuning_context_variable_converged(
-        std::string(variable_name), std::string(variable_value));
+    return apex_kokkos_tuning_context_variable_status(variable_name,
+        variable_value) == APEX_KOKKOS_TUNING_STATUS_CONVERGED;
+}
+
+APEX_EXPORT apex_kokkos_tuning_status apex_kokkos_kernel_status(
+    const char* kernel_name) {
+    if (kernel_name == nullptr) {
+        return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
+    }
+    return kokkos_tuning_context_variable_status(
+        std::string("kokkos.kernel_name"), std::string(kernel_name));
 }
 
 APEX_EXPORT bool apex_kokkos_kernel_converged(const char* kernel_name) {
     if (kernel_name == nullptr) { return false; }
-    return kokkos_tuning_context_variable_converged(
-        std::string("kokkos.kernel_name"), std::string(kernel_name));
+    return apex_kokkos_kernel_status(kernel_name) ==
+        APEX_KOKKOS_TUNING_STATUS_CONVERGED;
 }
 
 /* Declares a tuning variable named name with uniqueId id and all the

@@ -414,6 +414,20 @@ APEX_EXPORT apex_profile * apex_get_profile(apex_profiler_type type,
     const void * identifier);
 
 /**
+ \brief Query the current APEX Kokkos Tools tuning status for a context.
+
+ The context key is the stable context name built by APEX from Kokkos context
+ variables, for example "[kokkos.kernel_name:my_kernel,tree_node:main]".
+ This returns APEX_KOKKOS_TUNING_STATUS_UNKNOWN if Kokkos tuning is disabled
+ or the context is unknown.
+
+ \param context_key The APEX Kokkos tuning context key.
+ \return The active or cached tuning status for the context.
+ */
+APEX_EXPORT apex_kokkos_tuning_status apex_kokkos_tuning_context_status(
+    const char* context_key);
+
+/**
  \brief Query whether an APEX Kokkos Tools tuning context has converged.
 
  The context key is the stable context name built by APEX from Kokkos context
@@ -426,6 +440,23 @@ APEX_EXPORT apex_profile * apex_get_profile(apex_profiler_type type,
  */
 APEX_EXPORT bool apex_kokkos_tuning_context_converged(
     const char* context_key);
+
+/**
+ \brief Query the current status for any APEX Kokkos Tools tuning context
+        matching a context variable.
+
+ This is a generic helper for stable Kokkos context variables such as
+ "kokkos.kernel_name" or "kokkos.kernel_type". If multiple matching contexts
+ exist, converged takes precedence, followed by in-progress, best-so-far,
+ invalid, and unknown.
+
+ \param variable_name The Kokkos context variable name.
+ \param variable_value The Kokkos context variable value.
+ \return The highest-priority matching active or cached tuning status.
+ */
+APEX_EXPORT apex_kokkos_tuning_status
+apex_kokkos_tuning_context_variable_status(
+    const char* variable_name, const char* variable_value);
 
 /**
  \brief Query whether any APEX Kokkos Tools tuning context matching a context
@@ -442,6 +473,19 @@ APEX_EXPORT bool apex_kokkos_tuning_context_converged(
  */
 APEX_EXPORT bool apex_kokkos_tuning_context_variable_converged(
     const char* variable_name, const char* variable_value);
+
+/**
+ \brief Query the current status for any APEX Kokkos Tools tuning context for
+        a kernel name.
+
+ This checks contexts containing the Kokkos context variable
+ "kokkos.kernel_name" with the requested value.
+
+ \param kernel_name The Kokkos kernel name.
+ \return The highest-priority matching active or cached tuning status.
+ */
+APEX_EXPORT apex_kokkos_tuning_status apex_kokkos_kernel_status(
+    const char* kernel_name);
 
 /**
  \brief Query whether any APEX Kokkos Tools tuning context for a kernel name
