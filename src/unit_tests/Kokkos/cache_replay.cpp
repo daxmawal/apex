@@ -150,6 +150,7 @@ int main() {
     kokkosp_init_library(0, KOKKOSP_INTERFACE_VERSION, 0, nullptr);
     apex_set_use_kokkos_tuning(false);
     apex_set_use_kokkos_tuning_cache_only(true);
+    apex_set_kokkos_tuning_cache_allow_best_so_far(false);
     apex_set_use_kokkos_verbose(true);
     apex_set_use_screen_output(false);
     apex_set_kokkos_tuning_cache(strdup(cache_file.c_str()));
@@ -203,6 +204,15 @@ int main() {
     kokkosp_request_values(8, missing_inputs.size(), missing_inputs.data(),
         missing_outputs.size(), missing_outputs.data());
 
+    apex_set_kokkos_tuning_cache_allow_best_so_far(true);
+    std::array<Kokkos_Tools_VariableValue, 2> opt_in_outputs{
+        make_int_variable_value(b_output_id, -11, &output_info.info),
+        make_int_variable_value(a_output_id, -13, &output_info.info)
+    };
+
+    kokkosp_request_values(9, missing_inputs.size(), missing_inputs.data(),
+        opt_in_outputs.size(), opt_in_outputs.data());
+
     std::cout.rdbuf(old_buffer);
     apex_stop(profiler);
     kokkosp_finalize_library();
@@ -247,16 +257,37 @@ int main() {
             missing_b_output = value.value.int_value;
         }
     }
-    if (missing_a_output != 20 || missing_b_output != 20) {
+    if (missing_a_output != -9 || missing_b_output != -7) {
         std::stringstream ss;
-        ss << "Cache replay returned unexpected outputs for the best-so-far context: "
+        ss << "Cache-only replay unexpectedly applied a best-so-far context: "
            << "a_output=" << missing_a_output
            << ", b_output=" << missing_b_output;
         return report_failure(ss.str(), output, cache_file);
     }
+    if (output.find("No converged cached Kokkos tuning") == std::string::npos) {
+        return report_failure(
+            "Cache-only replay did not report the expected missing converged context.",
+            output, cache_file);
+    }
+    int64_t opt_in_a_output = -1;
+    int64_t opt_in_b_output = -1;
+    for (const auto& value : opt_in_outputs) {
+        if (value.type_id == a_output_id) {
+            opt_in_a_output = value.value.int_value;
+        } else if (value.type_id == b_output_id) {
+            opt_in_b_output = value.value.int_value;
+        }
+    }
+    if (opt_in_a_output != 20 || opt_in_b_output != 20) {
+        std::stringstream ss;
+        ss << "Cache-only replay did not apply best-so-far after opt-in: "
+           << "a_output=" << opt_in_a_output
+           << ", b_output=" << opt_in_b_output;
+        return report_failure(ss.str(), output, cache_file);
+    }
     if (output.find("Using Kokkos cached best-so-far") == std::string::npos) {
         return report_failure(
-            "Cache-only replay did not report the expected best-so-far context.",
+            "Cache-only replay did not report best-so-far usage after opt-in.",
             output, cache_file);
     }
     if (!apex_kokkos_tuning_context_converged(

@@ -373,6 +373,7 @@ inline unsigned int sc_nprocessors_onln(void)
     macro (APEX_KOKKOS_COUNTERS, use_kokkos_counters, bool, false, "Enable Kokkos counters.") \
     macro (APEX_KOKKOS_TUNING, use_kokkos_tuning, bool, false, "Enable Kokkos autotuning.") \
     macro (APEX_KOKKOS_TUNING_CACHE_ONLY, use_kokkos_tuning_cache_only, bool, false, "Enable Kokkos tuning cache replay without autotuning missing contexts.") \
+    macro (APEX_KOKKOS_TUNING_CACHE_ALLOW_BEST_SO_FAR, kokkos_tuning_cache_allow_best_so_far, bool, false, "Allow Kokkos cache-only replay to apply non-converged best-so-far results.") \
     macro (APEX_KOKKOS_TUNING_WINDOW, kokkos_tuning_window, int, 5, "Minimum number of tests per candidate while autotuning.") \
     macro (APEX_KOKKOS_PROFILING_FENCES, use_kokkos_profiling_fences, bool, false, "Force Kokkos to fence after all Kokkos kernel launches (recommended, but not required).") \
     macro (APEX_START_DELAY_SECONDS, start_delay_seconds, int, 0, "Delay collection of APEX data for N seconds.") \

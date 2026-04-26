@@ -251,6 +251,13 @@ public:
 
 std::map<std::string,TreeNode*> TreeNode::allContexts;
 
+enum class CachedContextStatus {
+    converged,
+    in_progress,
+    best_so_far,
+    invalid
+};
+
 class KokkosSession {
 private:
 // EXHAUSTIVE, RANDOM, NELDER_MEAD, PARALLEL_RANK_ORDER
@@ -329,6 +336,7 @@ public:
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedTunings;
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedBestSoFar;
     std::map<std::string, apex::exhaustive::Checkpoint> cachedExhaustiveCheckpoints;
+    std::map<std::string, CachedContextStatus> cachedContextStatus;
     int saved_node_id;
 };
 
@@ -404,6 +412,33 @@ std::string cacheValue(const std::string& line) {
     return value;
 }
 
+std::string status_to_string(CachedContextStatus status) {
+    switch (status) {
+        case CachedContextStatus::converged:
+            return std::string("converged");
+        case CachedContextStatus::in_progress:
+            return std::string("in_progress");
+        case CachedContextStatus::best_so_far:
+            return std::string("best_so_far");
+        case CachedContextStatus::invalid:
+            return std::string("invalid");
+    }
+    return std::string("invalid");
+}
+
+CachedContextStatus parse_status(const std::string& value) {
+    if (value.find("converged") != std::string::npos) {
+        return CachedContextStatus::converged;
+    }
+    if (value.find("in_progress") != std::string::npos) {
+        return CachedContextStatus::in_progress;
+    }
+    if (value.find("best_so_far") != std::string::npos) {
+        return CachedContextStatus::best_so_far;
+    }
+    return CachedContextStatus::invalid;
+}
+
 bool currentOutputIdForName(KokkosSession& session,
     const std::string& name, size_t& id) {
     for (const auto& output : session.outputs) {
@@ -472,10 +507,9 @@ void writeRequestResults(std::ofstream& results,
     }
 }
 
-void writeRequestCheckpoint(std::ofstream& results,
-    std::shared_ptr<apex_tuning_request> request) {
-    apex::exhaustive::Checkpoint checkpoint;
-    if (!request->get_exhaustive_checkpoint(checkpoint)) { return; }
+void writeExhaustiveCheckpoint(std::ofstream& results,
+    const apex::exhaustive::Checkpoint& checkpoint) {
+    if (!checkpoint.valid) { return; }
     results << "  ExhaustiveState:" << std::endl;
     results << "    Iteration: " << checkpoint.k << std::endl;
     results << "    Cost: " << checkpoint.cost << std::endl;
@@ -523,17 +557,25 @@ void KokkosSession::writeCache(void) {
         // always write the random search out
         bool converged = request->has_converged() ||
             strategy == apex_ah_tuning_strategy::APEX_RANDOM;
+        apex::exhaustive::Checkpoint checkpoint;
+        bool hasCheckpoint = request->get_exhaustive_checkpoint(checkpoint);
+        CachedContextStatus status = converged ?
+            CachedContextStatus::converged :
+            (hasCheckpoint ? CachedContextStatus::in_progress :
+                CachedContextStatus::best_so_far);
         results << "  Strategy: \"" <<
             strategy_to_string(request);
         if (strategy == apex_ah_tuning_strategy::AUTOMATIC) {
             results << " (auto)";
         }
         results << "\"" << std::endl;
+        results << "  Status: \"" << status_to_string(status) << "\""
+            << std::endl;
         results << "  Converged: " <<
             (converged ? "true" : "false") << std::endl;
         if (!converged) {
             results << "  BestSoFar: true" << std::endl;
-            writeRequestCheckpoint(results, request);
+            writeExhaustiveCheckpoint(results, checkpoint);
         }
         writeRequestResults(results, req.first, request);
     }
@@ -542,6 +584,7 @@ void KokkosSession::writeCache(void) {
         results << "Context_" << count++ << ":" << std::endl;
         results << "  Name: \"" << cached.first << "\"" << std::endl;
         results << "  Strategy: \"cached\"" << std::endl;
+        results << "  Status: \"converged\"" << std::endl;
         results << "  Converged: true" << std::endl;
         writeCachedResults(results, *this, cached.second);
         writtenContexts.insert(cached.first);
@@ -551,8 +594,19 @@ void KokkosSession::writeCache(void) {
         results << "Context_" << count++ << ":" << std::endl;
         results << "  Name: \"" << cached.first << "\"" << std::endl;
         results << "  Strategy: \"cached\"" << std::endl;
+        CachedContextStatus status = CachedContextStatus::best_so_far;
+        auto cachedStatus = cachedContextStatus.find(cached.first);
+        if (cachedStatus != cachedContextStatus.end()) {
+            status = cachedStatus->second;
+        }
+        results << "  Status: \"" << status_to_string(status) << "\""
+            << std::endl;
         results << "  Converged: false" << std::endl;
         results << "  BestSoFar: true" << std::endl;
+        auto checkpoint = cachedExhaustiveCheckpoints.find(cached.first);
+        if (checkpoint != cachedExhaustiveCheckpoints.end()) {
+            writeExhaustiveCheckpoint(results, checkpoint->second);
+        }
         writeCachedResults(results, *this, cached.second);
         writtenContexts.insert(cached.first);
     }
@@ -675,16 +729,27 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
     name.erase(std::remove(name.begin(),name.end(),'\"'),name.end());
     // strategy
     std::getline(results, line);
-    // converged?
-    std::getline(results, line);
-    std::string converged = line.substr(line.find(delimiter)+2);
-    const bool isConverged = converged.find("true") != std::string::npos;
+    bool hasExplicitStatus = false;
+    CachedContextStatus status = CachedContextStatus::invalid;
+    bool hasConvergedField = false;
+    bool isConverged = false;
     bool hasBestSoFar = false;
     apex::exhaustive::Checkpoint checkpoint;
     bool hasResults = false;
     while (true) {
         std::streampos beforeLine = results.tellg();
         if (!std::getline(results, line)) { break; }
+        if (line.find("Status", 0) != std::string::npos) {
+            status = parse_status(cacheValue(line));
+            hasExplicitStatus = true;
+            continue;
+        }
+        if (line.find("Converged", 0) != std::string::npos) {
+            std::string converged = line.substr(line.find(delimiter)+2);
+            hasConvergedField = true;
+            isConverged = converged.find("true") != std::string::npos;
+            continue;
+        }
         if (line.find("BestSoFar", 0) != std::string::npos) {
             std::string bestSoFar = line.substr(line.find(delimiter)+2);
             hasBestSoFar = bestSoFar.find("true") != std::string::npos;
@@ -702,6 +767,17 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
         break;
     }
     if (!hasResults) { return; }
+    if (!hasExplicitStatus) {
+        if (hasConvergedField && isConverged) {
+            status = CachedContextStatus::converged;
+        } else if (hasBestSoFar && checkpoint.valid) {
+            status = CachedContextStatus::in_progress;
+        } else if (hasBestSoFar) {
+            status = CachedContextStatus::best_so_far;
+        } else {
+            status = CachedContextStatus::invalid;
+        }
+    }
     std::map<size_t, struct Kokkos_Tools_VariableValue> vars;
     // NumVars
     std::getline(results, line);
@@ -733,9 +809,11 @@ void KokkosSession::parseContextCache(std::ifstream& results) {
         var.metadata = &(info->second);
         vars.insert(std::make_pair(id, std::move(var)));
     }
-    if (isConverged) {
+    cachedContextStatus[name] = status;
+    if (status == CachedContextStatus::converged) {
         cachedTunings.insert(std::make_pair(name, std::move(vars)));
-    } else if (hasBestSoFar) {
+    } else if (status == CachedContextStatus::in_progress ||
+               status == CachedContextStatus::best_so_far) {
         cachedBestSoFar.insert(std::make_pair(name, std::move(vars)));
         if (checkpoint.valid) {
             cachedExhaustiveCheckpoints.insert(
@@ -1578,7 +1656,9 @@ void kokkosp_request_values(
         session.used_history.insert(contextId);
     } else if (kokkos_tuning_cache_only()) {
         bool bestSoFar{false};
-        if (session.use_history) {
+        const bool allowBestSoFar =
+            apex::apex_options::kokkos_tuning_cache_allow_best_so_far();
+        if (allowBestSoFar && session.use_history) {
             bestSoFar = getCachedBestSoFar(name, numTuningVariables,
                 tuningVariableValues);
         }
@@ -1591,8 +1671,13 @@ void kokkosp_request_values(
             }
         } else if (session.verbose) {
             std::cout << std::string(getDepth(), ' ');
-            std::cout << "No cached Kokkos tuning or best-so-far for "
-                << name << std::endl;
+            if (allowBestSoFar) {
+                std::cout << "No cached Kokkos tuning or best-so-far for "
+                    << name << std::endl;
+            } else {
+                std::cout << "No converged cached Kokkos tuning for "
+                    << name << std::endl;
+            }
         }
     } else {
         if (session.use_history &&

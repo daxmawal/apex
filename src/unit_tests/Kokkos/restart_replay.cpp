@@ -82,41 +82,17 @@ int fail(const std::string& message) {
     return 1;
 }
 
-std::string cache_value(const std::string& line) {
-    const std::string delimiter = ": ";
-    size_t offset = line.find(delimiter);
-    if (offset == std::string::npos) { return std::string(); }
-    return line.substr(offset + delimiter.size());
-}
-
-bool read_cached_int_output(const std::string& cache_file, size_t id,
-    int64_t& value) {
-    std::ifstream input(cache_file);
-    std::string line;
-    while (std::getline(input, line)) {
-        if (line.find("    id: ") == std::string::npos) { continue; }
-        if (static_cast<size_t>(atol(cache_value(line).c_str())) != id) {
-            continue;
-        }
-        if (!std::getline(input, line) ||
-            line.find("    value: ") == std::string::npos) {
-            return false;
-        }
-        value = atol(cache_value(line).c_str());
-        return true;
-    }
-    return false;
-}
-
 void configure_apex(const std::string& cache_file, bool cache_only) {
     setenv("APEX_KOKKOS_TUNING", cache_only ? "0" : "1", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE_ONLY", cache_only ? "1" : "0", 1);
+    setenv("APEX_KOKKOS_TUNING_CACHE_ALLOW_BEST_SO_FAR", "0", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE", cache_file.c_str(), 1);
     setenv("APEX_KOKKOS_TUNING_POLICY", "exhaustive", 1);
     setenv("APEX_KOKKOS_TUNING_WINDOW", "1", 1);
     setenv("APEX_SCREEN_OUTPUT", "0", 1);
     apex_set_use_kokkos_tuning(!cache_only);
     apex_set_use_kokkos_tuning_cache_only(cache_only);
+    apex_set_kokkos_tuning_cache_allow_best_so_far(false);
     apex_set_use_kokkos_verbose(false);
     apex_set_use_screen_output(false);
     apex_set_kokkos_tuning_window(1);
@@ -198,13 +174,6 @@ int run_cache_only_child(const std::string& cache_file) {
     Variables vars = declare_variables(input_info, output_a_info,
         output_b_info);
 
-    int64_t expected_a = 0;
-    int64_t expected_b = 0;
-    if (!read_cached_int_output(cache_file, vars.output_a_id, expected_a) ||
-        !read_cached_int_output(cache_file, vars.output_b_id, expected_b)) {
-        return fail("Could not read cached best-so-far outputs.");
-    }
-
     std::array<Kokkos_Tools_VariableValue, 1> inputs{
         make_int_variable_value(vars.input_id, 7, &input_info.info)
     };
@@ -216,13 +185,12 @@ int run_cache_only_child(const std::string& cache_file) {
     kokkosp_request_values(2000, inputs.size(), inputs.data(),
         outputs.size(), outputs.data());
 
-    if (outputs[0].value.int_value != expected_a ||
-        outputs[1].value.int_value != expected_b) {
+    if (outputs[0].value.int_value != -17 ||
+        outputs[1].value.int_value != -19) {
         std::stringstream ss;
-        ss << "Cache-only replay did not apply the partial best-so-far context: "
+        ss << "Cache-only replay unexpectedly applied a partial best-so-far context: "
            << outputs[0].value.int_value << ","
-           << outputs[1].value.int_value << " expected "
-           << expected_a << "," << expected_b;
+           << outputs[1].value.int_value;
         return fail(ss.str());
     }
     if (apex_kokkos_tuning_context_converged(kContextKey)) {
@@ -303,7 +271,8 @@ int run_driver(const char* argv0) {
     if (status != 0) { return status; }
 
     const std::string run1_cache = slurp(cache_file);
-    if (run1_cache.find("Converged: false") == std::string::npos ||
+    if (run1_cache.find("Status: \"in_progress\"") == std::string::npos ||
+        run1_cache.find("Converged: false") == std::string::npos ||
         run1_cache.find("BestSoFar: true") == std::string::npos ||
         run1_cache.find("ExhaustiveState:") == std::string::npos) {
         return fail("Run 1 did not write a partial exhaustive checkpoint.");
