@@ -135,7 +135,8 @@ Variables declare_variables(IntSetInfo& input_info, IntSetInfo& output_a_info,
 }
 
 int run_tuning_child(const std::string& cache_file, const std::string& log_file,
-    int iterations, bool incompatible_space = false, int window = 1) {
+    int iterations, bool incompatible_space = false, int window = 1,
+    bool expect_converged = false) {
     configure_apex(cache_file, false, window);
     kokkosp_init_library(0, KOKKOSP_INTERFACE_VERSION, 0, nullptr);
 
@@ -175,12 +176,22 @@ int run_tuning_child(const std::string& cache_file, const std::string& log_file,
         kokkosp_end_context(context_id);
     }
 
-    if (apex_kokkos_tuning_context_converged(kContextKey)) {
-        return fail("Partial exhaustive context was reported as converged.");
-    }
-    if (apex_kokkos_tuning_context_status(kContextKey) !=
-        APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS) {
-        return fail("Partial exhaustive context did not report in-progress status.");
+    if (expect_converged) {
+        if (!apex_kokkos_tuning_context_converged(kContextKey)) {
+            return fail("Resumed exhaustive context did not converge.");
+        }
+        if (apex_kokkos_tuning_context_status(kContextKey) !=
+            APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+            return fail("Resumed exhaustive context did not report converged status.");
+        }
+    } else {
+        if (apex_kokkos_tuning_context_converged(kContextKey)) {
+            return fail("Partial exhaustive context was reported as converged.");
+        }
+        if (apex_kokkos_tuning_context_status(kContextKey) !=
+            APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS) {
+            return fail("Partial exhaustive context did not report in-progress status.");
+        }
     }
 
     apex_stop(profiler);
@@ -359,6 +370,18 @@ std::set<std::string> read_combinations(const std::string& log_file) {
     return combinations;
 }
 
+size_t count_combinations(const std::string& log_file) {
+    size_t count = 0;
+    std::ifstream input(log_file);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty()) {
+            count++;
+        }
+    }
+    return count;
+}
+
 int run_driver(const char* argv0) {
     std::stringstream base;
     base << "/tmp/apex_kokkos_restart_replay_" << getpid();
@@ -439,8 +462,19 @@ int run_driver(const char* argv0) {
     status = run_child(executable, "run2", cache_file, run2_log);
     if (status != 0) { return status; }
 
+    const std::string run2_cache = slurp(cache_file);
+    if (run2_cache.find("Status: \"converged\"") == std::string::npos ||
+        run2_cache.find("Converged: true") == std::string::npos ||
+        run2_cache.find("BestSoFar: true") != std::string::npos) {
+        return fail("Run 2 did not checkpoint a converged exhaustive context.");
+    }
+
     std::set<std::string> run1 = read_combinations(run1_log);
     std::set<std::string> run2 = read_combinations(run2_log);
+    const size_t run2_count = count_combinations(run2_log);
+    if (run2.size() != run2_count) {
+        return fail("Run 2 repeated an exhaustive combination within the resumed run.");
+    }
     for (const auto& combination : run2) {
         if (run1.count(combination) > 0) {
             return fail("Run 2 repeated an exhaustive combination from run 1: "
@@ -493,7 +527,7 @@ int main(int argc, char* argv[]) {
         }
         if (mode == "run2") {
             if (argc != 4) { return fail("run2 requires cache and log paths"); }
-            return run_tuning_child(argv[2], argv[3], 4);
+            return run_tuning_child(argv[2], argv[3], 7, false, 1, true);
         }
         if (mode == "run-incompatible") {
             if (argc != 4) {
