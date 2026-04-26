@@ -14,6 +14,7 @@ endif()
 set(example_programs
     cache_replay
     restart_replay
+    replay_buffers
     simple
     two_var
     ${openmp_programs}
@@ -40,5 +41,11 @@ foreach(example_program ${example_programs})
   set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "OMP_PROC_BIND=spread")
   set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "OMP_PLACES=threads")
   set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "OMP_NUM_THREADS=4")
+  if ("${example_program}" STREQUAL "replay_buffers")
+    set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_KOKKOS_TUNING_POLICY=exhaustive")
+    set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_KOKKOS_TUNING_WINDOW=1")
+    set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_KOKKOS_TUNING_CACHE=/tmp/apex_kokkos_replay_buffers.yaml")
+    set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_SCREEN_OUTPUT=0")
+  endif()
 
 endforeach()
