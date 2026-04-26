@@ -63,7 +63,7 @@ where APEX options are zero or more of:
     --apex:kokkos                 enable Kokkos support
     --apex:kokkos-tuning          enable Kokkos runtime autotuning support
     --apex:kokkos-tuning-cache-only
-                                  replay cached Kokkos tuning results and best-so-far values without autotuning
+                                  replay converged cached Kokkos tuning results without autotuning
     --apex:kokkos-fence           enable Kokkos fences for async kernels
     --apex:kokkos-counters        enable Kokkos counters for allocations and data transfers
     --apex:raja                   enable RAJA support

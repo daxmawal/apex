@@ -32,7 +32,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "IntelLLVM")
 endif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "IntelLLVM")
 
 set (CMAKE_CXX_EXTENSIONS_COMPUTED_DEFAULT OFF)
-set (CMAKE_CXX_STANDARD_COMPUTED_DEFAULT 20)
+set (CMAKE_CXX_STANDARD_COMPUTED_DEFAULT 17)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/Modules)
 include(APEX_DefaultOptions)
@@ -363,7 +363,7 @@ endif (NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "PGI")
 # ---------------------------------------------------
 
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # By the way, GCC lies.  It accepts the flag, but doesn't have the support.
