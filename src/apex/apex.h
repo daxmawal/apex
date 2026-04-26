@@ -419,7 +419,8 @@ APEX_EXPORT apex_profile * apex_get_profile(apex_profiler_type type,
  The context key is the stable context name built by APEX from Kokkos context
  variables, for example "[kokkos.kernel_name:my_kernel,tree_node:main]".
  This returns APEX_KOKKOS_TUNING_STATUS_UNKNOWN if Kokkos tuning is disabled
- or the context is unknown.
+ or the context is unknown. The symbol is available in non-Kokkos builds and
+ returns UNKNOWN there.
 
  \param context_key The APEX Kokkos tuning context key.
  \return The active or cached tuning status for the context.
@@ -696,23 +697,40 @@ FOREACH_APEX_STRING_OPTION(apex_macro)
 }
 
 #include <cstddef>
+#include <string>
 #include <utility>
 
 namespace apex {
 namespace kokkos {
 
+/**
+ * \brief Selects the APEX Kokkos tuning context monitored by replay helpers.
+ *
+ * ReplayTarget owns its target strings, so callers may safely construct it from
+ * temporary std::string values. Empty names are treated as unknown targets.
+ */
 struct ReplayTarget {
+    /** The lookup mode used when polling APEX for tuning status. */
     enum class Kind {
-        context_key,
-        context_variable,
-        kernel_name
+        context_key,      /*!< Match an exact APEX context key. */
+        context_variable, /*!< Match contexts containing a variable/value pair. */
+        kernel_name       /*!< Match the kokkos.kernel_name context variable. */
     };
 
     Kind kind = Kind::kernel_name;
-    const char* name = nullptr;
-    const char* value = nullptr;
+    std::string name;
+    std::string value;
 
     static ReplayTarget context(const char* context_key) {
+        ReplayTarget target;
+        target.kind = Kind::context_key;
+        if (context_key != nullptr) {
+            target.name = context_key;
+        }
+        return target;
+    }
+
+    static ReplayTarget context(const std::string& context_key) {
         ReplayTarget target;
         target.kind = Kind::context_key;
         target.name = context_key;
@@ -723,6 +741,19 @@ struct ReplayTarget {
         const char* variable_value) {
         ReplayTarget target;
         target.kind = Kind::context_variable;
+        if (variable_name != nullptr) {
+            target.name = variable_name;
+        }
+        if (variable_value != nullptr) {
+            target.value = variable_value;
+        }
+        return target;
+    }
+
+    static ReplayTarget context_variable(const std::string& variable_name,
+        const std::string& variable_value) {
+        ReplayTarget target;
+        target.kind = Kind::context_variable;
         target.name = variable_name;
         target.value = variable_value;
         return target;
@@ -731,35 +762,58 @@ struct ReplayTarget {
     static ReplayTarget kernel(const char* kernel_name) {
         ReplayTarget target;
         target.kind = Kind::kernel_name;
+        if (kernel_name != nullptr) {
+            target.name = kernel_name;
+        }
+        return target;
+    }
+
+    static ReplayTarget kernel(const std::string& kernel_name) {
+        ReplayTarget target;
+        target.kind = Kind::kernel_name;
         target.name = kernel_name;
         return target;
     }
 
+    /**
+     * \brief Query the current APEX tuning status for this target.
+     */
     apex_kokkos_tuning_status status() const {
         switch (kind) {
             case Kind::context_key:
-                return name == nullptr ?
+                return name.empty() ?
                     APEX_KOKKOS_TUNING_STATUS_UNKNOWN :
-                    apex_kokkos_tuning_context_status(name);
+                    apex_kokkos_tuning_context_status(name.c_str());
             case Kind::context_variable:
-                return (name == nullptr || value == nullptr) ?
+                return (name.empty() || value.empty()) ?
                     APEX_KOKKOS_TUNING_STATUS_UNKNOWN :
-                    apex_kokkos_tuning_context_variable_status(name, value);
+                    apex_kokkos_tuning_context_variable_status(name.c_str(),
+                        value.c_str());
             case Kind::kernel_name:
-                return name == nullptr ?
+                return name.empty() ?
                     APEX_KOKKOS_TUNING_STATUS_UNKNOWN :
-                    apex_kokkos_kernel_status(name);
+                    apex_kokkos_kernel_status(name.c_str());
         }
         return APEX_KOKKOS_TUNING_STATUS_UNKNOWN;
     }
 };
 
+/**
+ * \brief Controls a replay loop driven by APEX tuning status.
+ *
+ * max_replays limits additional executions. A value of zero only reports the
+ * initial status. stop_on_invalid stops immediately if the target is known to
+ * have no valid tuning configuration.
+ */
 struct ReplayOptions {
     ReplayTarget target;
     std::size_t max_replays = 0;
     bool stop_on_invalid = true;
 };
 
+/**
+ * \brief Summary returned by replay_until_converged.
+ */
 struct ReplayResult {
     std::size_t replays = 0;
     apex_kokkos_tuning_status initial_status =
@@ -783,6 +837,16 @@ inline bool replay_status_is_invalid(apex_kokkos_tuning_status status) {
     return status == APEX_KOKKOS_TUNING_STATUS_INVALID;
 }
 
+/**
+ * \brief Execute an opt-in replay loop until the selected target converges.
+ *
+ * APEX does not capture Kokkos lambdas, views, MPI calls, I/O, RNG state, or
+ * other side effects. The caller must provide replay-safe work. prepare_buffers
+ * is called before each replay and should restore temporary replay buffers
+ * outside the measured tuning context. replay_body should execute the tuned
+ * work on those temporary buffers and fence when asynchronous execution would
+ * otherwise make the measured timing or buffer state ambiguous.
+ */
 template <typename Prepare, typename Body>
 ReplayResult replay_until_converged(const ReplayOptions& options,
     Prepare&& prepare_buffers, Body&& replay_body) {
@@ -827,11 +891,26 @@ ReplayResult replay_kernel_until_converged(const char* kernel_name,
         std::forward<Body>(replay_body));
 }
 
+template <typename Prepare, typename Body>
+ReplayResult replay_kernel_until_converged(const std::string& kernel_name,
+    std::size_t max_replays, Prepare&& prepare_buffers, Body&& replay_body) {
+    return replay_kernel_until_converged(kernel_name.c_str(), max_replays,
+        std::forward<Prepare>(prepare_buffers),
+        std::forward<Body>(replay_body));
+}
+
 template <typename Body>
 ReplayResult replay_kernel_until_converged(const char* kernel_name,
     std::size_t max_replays, Body&& replay_body) {
     return replay_kernel_until_converged(kernel_name, max_replays,
         NoReplayPrepare(), std::forward<Body>(replay_body));
+}
+
+template <typename Body>
+ReplayResult replay_kernel_until_converged(const std::string& kernel_name,
+    std::size_t max_replays, Body&& replay_body) {
+    return replay_kernel_until_converged(kernel_name.c_str(), max_replays,
+        std::forward<Body>(replay_body));
 }
 
 template <typename Prepare, typename Body>
@@ -845,11 +924,26 @@ ReplayResult replay_context_until_converged(const char* context_key,
         std::forward<Body>(replay_body));
 }
 
+template <typename Prepare, typename Body>
+ReplayResult replay_context_until_converged(const std::string& context_key,
+    std::size_t max_replays, Prepare&& prepare_buffers, Body&& replay_body) {
+    return replay_context_until_converged(context_key.c_str(), max_replays,
+        std::forward<Prepare>(prepare_buffers),
+        std::forward<Body>(replay_body));
+}
+
 template <typename Body>
 ReplayResult replay_context_until_converged(const char* context_key,
     std::size_t max_replays, Body&& replay_body) {
     return replay_context_until_converged(context_key, max_replays,
         NoReplayPrepare(), std::forward<Body>(replay_body));
+}
+
+template <typename Body>
+ReplayResult replay_context_until_converged(const std::string& context_key,
+    std::size_t max_replays, Body&& replay_body) {
+    return replay_context_until_converged(context_key.c_str(), max_replays,
+        std::forward<Body>(replay_body));
 }
 
 template <typename Prepare, typename Body>
@@ -865,12 +959,31 @@ ReplayResult replay_context_variable_until_converged(
         std::forward<Body>(replay_body));
 }
 
+template <typename Prepare, typename Body>
+ReplayResult replay_context_variable_until_converged(
+    const std::string& variable_name, const std::string& variable_value,
+    std::size_t max_replays, Prepare&& prepare_buffers, Body&& replay_body) {
+    return replay_context_variable_until_converged(variable_name.c_str(),
+        variable_value.c_str(), max_replays,
+        std::forward<Prepare>(prepare_buffers),
+        std::forward<Body>(replay_body));
+}
+
 template <typename Body>
 ReplayResult replay_context_variable_until_converged(
     const char* variable_name, const char* variable_value,
     std::size_t max_replays, Body&& replay_body) {
     return replay_context_variable_until_converged(variable_name,
         variable_value, max_replays, NoReplayPrepare(),
+        std::forward<Body>(replay_body));
+}
+
+template <typename Body>
+ReplayResult replay_context_variable_until_converged(
+    const std::string& variable_name, const std::string& variable_value,
+    std::size_t max_replays, Body&& replay_body) {
+    return replay_context_variable_until_converged(variable_name.c_str(),
+        variable_value.c_str(), max_replays,
         std::forward<Body>(replay_body));
 }
 

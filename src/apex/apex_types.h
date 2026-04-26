@@ -105,13 +105,21 @@ typedef enum _thread_state {
 
 /**
  * Typedef for Kokkos Tools tuning cache/search status.
+ *
+ * UNKNOWN means APEX has no usable state for the requested target, including
+ * builds or runs where Kokkos tuning support is disabled. CONVERGED is the only
+ * status that cache-only replay should treat as safe by default. IN_PROGRESS
+ * and BEST_SO_FAR describe non-converged search state; BEST_SO_FAR is only a
+ * fallback candidate and must not be treated as converged unless the caller
+ * explicitly opts into that risk. INVALID means the target is known, but the
+ * search state has no valid tuning configuration to apply.
  */
 typedef enum _apex_kokkos_tuning_status {
-    APEX_KOKKOS_TUNING_STATUS_UNKNOWN = 0,
-    APEX_KOKKOS_TUNING_STATUS_CONVERGED,
-    APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS,
-    APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR,
-    APEX_KOKKOS_TUNING_STATUS_INVALID
+    APEX_KOKKOS_TUNING_STATUS_UNKNOWN = 0,   /*!< No usable tuning state. */
+    APEX_KOKKOS_TUNING_STATUS_CONVERGED,     /*!< Search has converged. */
+    APEX_KOKKOS_TUNING_STATUS_IN_PROGRESS,   /*!< Search is checkpointed or active. */
+    APEX_KOKKOS_TUNING_STATUS_BEST_SO_FAR,   /*!< Best non-converged candidate. */
+    APEX_KOKKOS_TUNING_STATUS_INVALID        /*!< No valid candidate is available. */
 } apex_kokkos_tuning_status;
 
 /**

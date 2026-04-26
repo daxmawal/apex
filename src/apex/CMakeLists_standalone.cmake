@@ -74,6 +74,8 @@ endif(APEX_WITH_TCMALLOC)
 if(APEX_WITH_KOKKOS)
     message(INFO " Adding Kokkos support source files")
     SET(APEX_KOKKOS_SOURCE apex_kokkos.cpp apex_kokkos_tuning.cpp)
+else()
+    SET(APEX_KOKKOS_SOURCE apex_kokkos_tuning_stubs.cpp)
 endif(APEX_WITH_KOKKOS)
 
 # Try to keep this in alphabetical order
