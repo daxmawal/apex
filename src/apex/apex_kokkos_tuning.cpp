@@ -1420,8 +1420,16 @@ bool getCachedTunings(std::string name,
 
 bool getCachedBestSoFar(std::string name,
     const size_t vars,
-    Kokkos_Tools_VariableValue* values) {
+    Kokkos_Tools_VariableValue* values,
+    bool includeInProgress = true) {
     KokkosSession& session = KokkosSession::getSession();
+    auto status = session.cachedContextStatus.find(name);
+    if (status != session.cachedContextStatus.end() &&
+        status->second != CachedContextStatus::best_so_far &&
+        !(includeInProgress &&
+            status->second == CachedContextStatus::in_progress)) {
+        return false;
+    }
     return applyCachedValues(name, session.cachedBestSoFar, vars, values, false);
 }
 
@@ -1976,7 +1984,7 @@ void kokkosp_request_values(
             apex::apex_options::kokkos_tuning_cache_allow_best_so_far();
         if (allowBestSoFar && session.use_history) {
             bestSoFar = getCachedBestSoFar(name, numTuningVariables,
-                tuningVariableValues);
+                tuningVariableValues, false);
         }
         if (bestSoFar) {
             session.used_history.insert(contextId);

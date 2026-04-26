@@ -13,6 +13,7 @@ endif()
 
 set(example_programs
     cache_replay
+    cache_only_status
     restart_replay
     replay_buffers
     simple
