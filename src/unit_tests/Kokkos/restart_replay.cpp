@@ -235,6 +235,78 @@ int run_cache_only_child(const std::string& cache_file) {
     return 0;
 }
 
+int run_wrapper_child(const std::string& cache_file,
+    const std::string& log_file) {
+    configure_apex(cache_file, false);
+    kokkosp_init_library(0, KOKKOSP_INTERFACE_VERSION, 0, nullptr);
+
+    apex_profiler_handle profiler =
+        apex_start(APEX_NAME_STRING, kTimerName);
+
+    IntSetInfo input_info({7});
+    IntSetInfo output_a_info({0, 1, 2});
+    IntSetInfo output_b_info({0, 1, 2, 3});
+    Variables vars = declare_variables(input_info, output_a_info,
+        output_b_info);
+
+    std::ofstream log(log_file);
+    if (!log.good()) {
+        return fail("Could not open replay wrapper log: " + log_file);
+    }
+
+    size_t prepare_calls = 0;
+    size_t body_calls = 0;
+    auto prepare = [&]() {
+        prepare_calls++;
+    };
+    auto body = [&]() {
+        std::array<Kokkos_Tools_VariableValue, 1> inputs{
+            make_int_variable_value(vars.input_id, 7, &input_info.info)
+        };
+        std::array<Kokkos_Tools_VariableValue, 2> outputs{
+            make_int_variable_value(vars.output_a_id, -1,
+                &output_a_info.info),
+            make_int_variable_value(vars.output_b_id, -1,
+                &output_b_info.info)
+        };
+        size_t context_id = 3000 + body_calls;
+        body_calls++;
+        kokkosp_begin_context(context_id);
+        kokkosp_request_values(context_id, inputs.size(), inputs.data(),
+            outputs.size(), outputs.data());
+        log << outputs[0].value.int_value << ","
+            << outputs[1].value.int_value << std::endl;
+        usleep(1000);
+        kokkosp_end_context(context_id);
+    };
+
+    apex::kokkos::ReplayResult result =
+        apex::kokkos::replay_context_until_converged(kContextKey, 20,
+            prepare, body);
+
+    if (!result.converged ||
+        result.final_status != APEX_KOKKOS_TUNING_STATUS_CONVERGED) {
+        return fail("Replay wrapper did not stop on convergence.");
+    }
+    if (result.max_replays_reached || result.stopped_on_invalid) {
+        return fail("Replay wrapper stopped for the wrong reason.");
+    }
+    if (result.replays != 12) {
+        std::stringstream ss;
+        ss << "Replay wrapper ran an unexpected number of iterations: "
+           << result.replays;
+        return fail(ss.str());
+    }
+    if (prepare_calls != result.replays || body_calls != result.replays) {
+        return fail("Replay wrapper did not call prepare/body once per replay.");
+    }
+
+    apex_stop(profiler);
+    kokkosp_finalize_library();
+    apex_finalize();
+    return 0;
+}
+
 std::string executable_path(const char* argv0) {
     char buffer[PATH_MAX];
     ssize_t size = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
@@ -297,24 +369,29 @@ int run_driver(const char* argv0) {
         base.str() + ".invalid.yaml";
     const std::string window_cache_file =
         base.str() + ".window.yaml";
+    const std::string wrapper_cache_file =
+        base.str() + ".wrapper.yaml";
     const std::string run1_log = base.str() + ".run1";
     const std::string run2_log = base.str() + ".run2";
     const std::string incompatible_log = base.str() + ".incompatible";
     const std::string invalid_log = base.str() + ".invalid";
     const std::string window_run1_log = base.str() + ".window1";
     const std::string window_run2_log = base.str() + ".window2";
+    const std::string wrapper_log = base.str() + ".wrapper";
     const std::string executable = executable_path(argv0);
 
     unlink(cache_file.c_str());
     unlink(incompatible_cache_file.c_str());
     unlink(invalid_cache_file.c_str());
     unlink(window_cache_file.c_str());
+    unlink(wrapper_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
     unlink(incompatible_log.c_str());
     unlink(invalid_log.c_str());
     unlink(window_run1_log.c_str());
     unlink(window_run2_log.c_str());
+    unlink(wrapper_log.c_str());
 
     int status = run_child(executable, "run1", cache_file, run1_log);
     if (status != 0) { return status; }
@@ -386,16 +463,22 @@ int run_driver(const char* argv0) {
         return fail("Partial intra-configuration window was not resumed.");
     }
 
+    status = run_child(executable, "run-wrapper", wrapper_cache_file,
+        wrapper_log);
+    if (status != 0) { return status; }
+
     unlink(cache_file.c_str());
     unlink(incompatible_cache_file.c_str());
     unlink(invalid_cache_file.c_str());
     unlink(window_cache_file.c_str());
+    unlink(wrapper_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
     unlink(incompatible_log.c_str());
     unlink(invalid_log.c_str());
     unlink(window_run1_log.c_str());
     unlink(window_run2_log.c_str());
+    unlink(wrapper_log.c_str());
     return 0;
 }
 
@@ -435,6 +518,12 @@ int main(int argc, char* argv[]) {
                 return fail("run-window2 requires cache and log paths");
             }
             return run_tuning_child(argv[2], argv[3], 2, false, 3);
+        }
+        if (mode == "run-wrapper") {
+            if (argc != 4) {
+                return fail("run-wrapper requires cache and log paths");
+            }
+            return run_wrapper_child(argv[2], argv[3]);
         }
         if (mode == "cache-only") {
             if (argc != 3) { return fail("cache-only requires a cache path"); }
