@@ -27,7 +27,18 @@
 #include <map>
 #include <numeric>
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iostream>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#else
+#include <process.h>
+#endif
 #include "apex.hpp"
 #include "Kokkos_Profiling_C_Interface.h"
 #include "apex_api.hpp"
@@ -524,6 +535,72 @@ void writeExhaustiveCheckpoint(std::ofstream& results,
     }
 }
 
+std::string temporaryCacheFileName(const std::string& filename) {
+#ifndef _WIN32
+    const long pid = static_cast<long>(getpid());
+#else
+    const long pid = static_cast<long>(_getpid());
+#endif
+    return filename + ".tmp." + std::to_string(pid);
+}
+
+std::string parentDirectory(const std::string& filename) {
+    const size_t slash = filename.find_last_of("/\\");
+    if (slash == std::string::npos) { return std::string("."); }
+    if (slash == 0) { return std::string("/"); }
+    return filename.substr(0, slash);
+}
+
+#ifndef _WIN32
+bool syncFileToDisk(const std::string& filename) {
+    int fd = open(filename.c_str(), O_RDONLY);
+    if (fd < 0) { return false; }
+    bool ok = (fsync(fd) == 0);
+    if (close(fd) != 0) { ok = false; }
+    return ok;
+}
+
+void syncParentDirectory(const std::string& filename) {
+    const std::string directory = parentDirectory(filename);
+    int fd = open(directory.c_str(), O_RDONLY
+#ifdef O_DIRECTORY
+        | O_DIRECTORY
+#endif
+    );
+    if (fd < 0) { return; }
+    fsync(fd);
+    close(fd);
+}
+#else
+bool syncFileToDisk(const std::string&) {
+    return true;
+}
+
+void syncParentDirectory(const std::string&) {}
+#endif
+
+bool commitCacheFileAtomically(const std::string& temporaryFilename,
+    const std::string& finalFilename) {
+    if (!syncFileToDisk(temporaryFilename)) {
+        std::cerr << "ERROR: Could not sync temporary Kokkos tuning cache '"
+            << temporaryFilename << "': " << std::strerror(errno) << std::endl;
+        std::remove(temporaryFilename.c_str());
+        return false;
+    }
+#ifdef _WIN32
+    std::remove(finalFilename.c_str());
+#endif
+    if (std::rename(temporaryFilename.c_str(), finalFilename.c_str()) != 0) {
+        std::cerr << "ERROR: Could not replace Kokkos tuning cache '"
+            << finalFilename << "' with temporary file '" << temporaryFilename
+            << "': " << std::strerror(errno) << std::endl;
+        std::remove(temporaryFilename.c_str());
+        return false;
+    }
+    syncParentDirectory(finalFilename);
+    return true;
+}
+
 void KokkosSession::writeCache(void) {
     if(apex::apex_options::use_kokkos_tuning_cache_only()) { return; }
     //if(!saveCache) { return; }
@@ -533,7 +610,13 @@ void KokkosSession::writeCache(void) {
     } else {
         cacheFilename = makeCacheFileName();
     }
-    std::ofstream results(cacheFilename);
+    const std::string temporaryFilename = temporaryCacheFileName(cacheFilename);
+    std::ofstream results(temporaryFilename);
+    if (!results.good()) {
+        std::cerr << "ERROR: Could not open temporary Kokkos tuning cache '"
+            << temporaryFilename << "' for writing." << std::endl;
+        return;
+    }
     std::cout << "Writing cache of Kokkos tuning results to: '" << cacheFilename << "'" << std::endl;
     for (auto i : inputs) {
         size_t id = i.first;
@@ -610,7 +693,22 @@ void KokkosSession::writeCache(void) {
         writeCachedResults(results, *this, cached.second);
         writtenContexts.insert(cached.first);
     }
+    results.flush();
+    if (!results.good()) {
+        std::cerr << "ERROR: Could not flush temporary Kokkos tuning cache '"
+            << temporaryFilename << "'." << std::endl;
+        results.close();
+        std::remove(temporaryFilename.c_str());
+        return;
+    }
     results.close();
+    if (!results.good()) {
+        std::cerr << "ERROR: Could not close temporary Kokkos tuning cache '"
+            << temporaryFilename << "'." << std::endl;
+        std::remove(temporaryFilename.c_str());
+        return;
+    }
+    commitCacheFileAtomically(temporaryFilename, cacheFilename);
 }
 
 void KokkosSession::parseVariableCache(std::ifstream& results) {
