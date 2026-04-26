@@ -22,6 +22,7 @@ set(example_programs
 
 if(Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP OR Kokkos_ENABLE_SYCL)
   list(APPEND example_programs replay_buffers_async)
+  list(APPEND example_programs replay_buffers_gpu)
 endif()
 
 foreach(example_program ${example_programs})
@@ -55,6 +56,9 @@ foreach(example_program ${example_programs})
   endif()
   if ("${example_program}" STREQUAL "replay_buffers_async")
     set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_KOKKOS_TUNING_CACHE=/tmp/apex_kokkos_replay_buffers_async.yaml")
+  endif()
+  if ("${example_program}" STREQUAL "replay_buffers_gpu")
+    set_property(TEST "test_${example_program}_kokkos" APPEND PROPERTY ENVIRONMENT "APEX_KOKKOS_TUNING_CACHE=/tmp/apex_kokkos_replay_buffers_gpu.yaml")
   endif()
 
 endforeach()
