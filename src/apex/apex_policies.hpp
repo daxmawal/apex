@@ -316,6 +316,12 @@ class apex_tuning_request {
         bool get_exhaustive_checkpoint(
             apex::exhaustive::Checkpoint& checkpoint) const;
 
+        bool get_exhaustive_window_checkpoint(
+            apex::exhaustive::WindowCheckpoint& window) const;
+
+        bool consume_exhaustive_window_checkpoint(
+            apex::exhaustive::WindowCheckpoint& window) const;
+
         apex_tuning_session_handle get_session_handle() const {
             return tuning_session_handle;
         };

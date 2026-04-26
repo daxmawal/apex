@@ -90,6 +90,30 @@ bool apex_tuning_request::get_exhaustive_checkpoint(
     return checkpoint.valid;
 }
 
+bool apex_tuning_request::get_exhaustive_window_checkpoint(
+    apex::exhaustive::WindowCheckpoint& window) const {
+    if (strategy != apex_ah_tuning_strategy::APEX_EXHAUSTIVE) {
+        return false;
+    }
+    auto tuning_session = get_session(tuning_session_handle);
+    if (!tuning_session) {
+        return false;
+    }
+    return tuning_session->exhaustive_session.get_restored_window(window);
+}
+
+bool apex_tuning_request::consume_exhaustive_window_checkpoint(
+    apex::exhaustive::WindowCheckpoint& window) const {
+    if (strategy != apex_ah_tuning_strategy::APEX_EXHAUSTIVE) {
+        return false;
+    }
+    auto tuning_session = get_session(tuning_session_handle);
+    if (!tuning_session) {
+        return false;
+    }
+    return tuning_session->exhaustive_session.consume_restored_window(window);
+}
+
 #ifdef APEX_HAVE_ACTIVEHARMONY
 static const char * library_for_strategy(apex_ah_tuning_strategy s) {
     switch(s) {

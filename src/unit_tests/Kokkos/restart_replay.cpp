@@ -88,20 +88,36 @@ bool write_file(const std::string& path, const std::string& contents) {
     return output.good();
 }
 
-void configure_apex(const std::string& cache_file, bool cache_only) {
+bool write_cache_with_invalid_config(const std::string& path,
+    std::string contents, const std::string& invalid_config) {
+    const std::string marker = "    NumInvalidConfigs: 0\n";
+    const size_t offset = contents.find(marker);
+    if (offset == std::string::npos) {
+        return false;
+    }
+    std::stringstream replacement;
+    replacement << "    NumInvalidConfigs: 1\n"
+        << "    InvalidConfig: \"" << invalid_config << "\"\n";
+    contents.replace(offset, marker.size(), replacement.str());
+    return write_file(path, contents);
+}
+
+void configure_apex(const std::string& cache_file, bool cache_only,
+    int window = 1) {
+    const std::string window_text = std::to_string(window);
     setenv("APEX_KOKKOS_TUNING", cache_only ? "0" : "1", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE_ONLY", cache_only ? "1" : "0", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE_ALLOW_BEST_SO_FAR", "0", 1);
     setenv("APEX_KOKKOS_TUNING_CACHE", cache_file.c_str(), 1);
     setenv("APEX_KOKKOS_TUNING_POLICY", "exhaustive", 1);
-    setenv("APEX_KOKKOS_TUNING_WINDOW", "1", 1);
+    setenv("APEX_KOKKOS_TUNING_WINDOW", window_text.c_str(), 1);
     setenv("APEX_SCREEN_OUTPUT", "0", 1);
     apex_set_use_kokkos_tuning(!cache_only);
     apex_set_use_kokkos_tuning_cache_only(cache_only);
     apex_set_kokkos_tuning_cache_allow_best_so_far(false);
     apex_set_use_kokkos_verbose(false);
     apex_set_use_screen_output(false);
-    apex_set_kokkos_tuning_window(1);
+    apex_set_kokkos_tuning_window(window);
     apex_set_kokkos_tuning_policy(strdup("exhaustive"));
     apex_set_kokkos_tuning_cache(strdup(cache_file.c_str()));
 }
@@ -119,8 +135,8 @@ Variables declare_variables(IntSetInfo& input_info, IntSetInfo& output_a_info,
 }
 
 int run_tuning_child(const std::string& cache_file, const std::string& log_file,
-    int iterations, bool incompatible_space = false) {
-    configure_apex(cache_file, false);
+    int iterations, bool incompatible_space = false, int window = 1) {
+    configure_apex(cache_file, false, window);
     kokkosp_init_library(0, KOKKOSP_INTERFACE_VERSION, 0, nullptr);
 
     apex_profiler_handle profiler =
@@ -277,16 +293,28 @@ int run_driver(const char* argv0) {
     const std::string cache_file = base.str() + ".yaml";
     const std::string incompatible_cache_file =
         base.str() + ".incompatible.yaml";
+    const std::string invalid_cache_file =
+        base.str() + ".invalid.yaml";
+    const std::string window_cache_file =
+        base.str() + ".window.yaml";
     const std::string run1_log = base.str() + ".run1";
     const std::string run2_log = base.str() + ".run2";
     const std::string incompatible_log = base.str() + ".incompatible";
+    const std::string invalid_log = base.str() + ".invalid";
+    const std::string window_run1_log = base.str() + ".window1";
+    const std::string window_run2_log = base.str() + ".window2";
     const std::string executable = executable_path(argv0);
 
     unlink(cache_file.c_str());
     unlink(incompatible_cache_file.c_str());
+    unlink(invalid_cache_file.c_str());
+    unlink(window_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
     unlink(incompatible_log.c_str());
+    unlink(invalid_log.c_str());
+    unlink(window_run1_log.c_str());
+    unlink(window_run2_log.c_str());
 
     int status = run_child(executable, "run1", cache_file, run1_log);
     if (status != 0) { return status; }
@@ -298,7 +326,9 @@ int run_driver(const char* argv0) {
         run1_cache.find("ExhaustiveState:") == std::string::npos ||
         run1_cache.find("MaxIterations:") == std::string::npos ||
         run1_cache.find("CandidateCount:") == std::string::npos ||
-        run1_cache.find("CandidateHash:") == std::string::npos) {
+        run1_cache.find("CandidateHash:") == std::string::npos ||
+        run1_cache.find("WindowSamples:") == std::string::npos ||
+        run1_cache.find("NumInvalidConfigs:") == std::string::npos) {
         return fail("Run 1 did not write a partial exhaustive checkpoint.");
     }
 
@@ -317,6 +347,18 @@ int run_driver(const char* argv0) {
             "of restarting from the beginning.");
     }
 
+    if (!write_cache_with_invalid_config(invalid_cache_file, run1_cache,
+            "restart_replay.output_a=2;restart_replay.output_b=1;")) {
+        return fail("Could not create invalid-config cache copy.");
+    }
+    status = run_child(executable, "run-invalid", invalid_cache_file,
+        invalid_log);
+    if (status != 0) { return status; }
+    const std::string invalid_run = slurp(invalid_log);
+    if (invalid_run.compare(0, 4, "0,2\n") != 0) {
+        return fail("Invalid exhaustive checkpoint configuration was not skipped.");
+    }
+
     status = run_child(executable, "run2", cache_file, run2_log);
     if (status != 0) { return status; }
 
@@ -329,11 +371,31 @@ int run_driver(const char* argv0) {
         }
     }
 
+    status = run_child(executable, "run-window1", window_cache_file,
+        window_run1_log);
+    if (status != 0) { return status; }
+    const std::string window_cache = slurp(window_cache_file);
+    if (window_cache.find("WindowSamples: 2") == std::string::npos) {
+        return fail("Partial intra-configuration window was not checkpointed.");
+    }
+    status = run_child(executable, "run-window2", window_cache_file,
+        window_run2_log);
+    if (status != 0) { return status; }
+    const std::string window_run2 = slurp(window_run2_log);
+    if (window_run2 != "0,0\n1,0\n") {
+        return fail("Partial intra-configuration window was not resumed.");
+    }
+
     unlink(cache_file.c_str());
     unlink(incompatible_cache_file.c_str());
+    unlink(invalid_cache_file.c_str());
+    unlink(window_cache_file.c_str());
     unlink(run1_log.c_str());
     unlink(run2_log.c_str());
     unlink(incompatible_log.c_str());
+    unlink(invalid_log.c_str());
+    unlink(window_run1_log.c_str());
+    unlink(window_run2_log.c_str());
     return 0;
 }
 
@@ -355,6 +417,24 @@ int main(int argc, char* argv[]) {
                 return fail("run-incompatible requires cache and log paths");
             }
             return run_tuning_child(argv[2], argv[3], 1, true);
+        }
+        if (mode == "run-invalid") {
+            if (argc != 4) {
+                return fail("run-invalid requires cache and log paths");
+            }
+            return run_tuning_child(argv[2], argv[3], 1);
+        }
+        if (mode == "run-window1") {
+            if (argc != 4) {
+                return fail("run-window1 requires cache and log paths");
+            }
+            return run_tuning_child(argv[2], argv[3], 2, false, 3);
+        }
+        if (mode == "run-window2") {
+            if (argc != 4) {
+                return fail("run-window2 requires cache and log paths");
+            }
+            return run_tuning_child(argv[2], argv[3], 2, false, 3);
         }
         if (mode == "cache-only") {
             if (argc != 3) { return fail("cache-only requires a cache path"); }

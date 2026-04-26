@@ -11,6 +11,7 @@
 #include <sstream>
 #include <limits>
 #include <map>
+#include <set>
 #include "apex_types.h"
 
 namespace apex {
@@ -26,12 +27,22 @@ struct VariableCheckpoint {
     std::string candidate_hash;
 };
 
+struct WindowCheckpoint {
+    bool valid = false;
+    double samples = 0.0;
+    double accumulated = 0.0;
+    double minimum = 0.0;
+    double maximum = 0.0;
+};
+
 struct Checkpoint {
     bool valid = false;
     size_t k = 1;
     size_t kmax = 0;
     double cost = std::numeric_limits<double>::max();
     double best_cost = std::numeric_limits<double>::max();
+    WindowCheckpoint window;
+    std::vector<std::string> invalid_configs;
     std::map<std::string, VariableCheckpoint> variables;
 };
 
@@ -158,8 +169,35 @@ private:
     size_t kmax;
     size_t k;
     std::map<std::string, Variable> vars;
+    std::set<std::string> invalid_configs;
+    WindowCheckpoint restored_window;
     //const size_t max_iterations{1000};
     //const size_t min_iterations{100};
+    void advance_once() {
+        for (auto& v : vars) {
+            size_t index = v.second.get_next_neighbor();
+            if (index != 0) {
+                break;
+            }
+        }
+    }
+    size_t get_num_configurations() const {
+        size_t count{1};
+        for (const auto& v : vars) {
+            count = count * v.second.candidate_count();
+        }
+        return count;
+    }
+    std::string current_config_key() const {
+        std::stringstream key;
+        for (const auto& v : vars) {
+            key << v.first << "=" << v.second.current_index << ";";
+        }
+        return key.str();
+    }
+    bool current_config_invalid() const {
+        return invalid_configs.count(current_config_key()) > 0;
+    }
 public:
     void evaluate(double new_cost);
     Exhaustive() :
@@ -170,12 +208,16 @@ public:
     }
     bool converged() { return (k >= kmax); }
     void getNewSettings() {
-        /*   Increment neighbour */
-        for (auto& v : vars) {
-            size_t index = v.second.get_next_neighbor();
-            if (index != 0) {
-                break;
-            }
+        if (vars.empty()) { return; }
+        size_t attempts{0};
+        const size_t max_attempts = std::max<size_t>(1, get_num_configurations());
+        do {
+            advance_once();
+            attempts++;
+        } while (attempts < max_attempts && current_config_invalid());
+        if (current_config_invalid() &&
+            invalid_configs.size() >= max_attempts) {
+            k = kmax;
         }
     }
     void saveBestSettings() {
@@ -188,6 +230,9 @@ public:
         checkpoint.kmax = kmax;
         checkpoint.cost = cost;
         checkpoint.best_cost = best_cost;
+        checkpoint.window = restored_window;
+        checkpoint.invalid_configs.assign(invalid_configs.begin(),
+            invalid_configs.end());
         for (const auto& v : vars) {
             VariableCheckpoint variable;
             variable.current_index = v.second.current_index;
@@ -225,12 +270,34 @@ public:
         if (k == 0) { k = 1; }
         cost = checkpoint.cost;
         best_cost = checkpoint.best_cost;
+        invalid_configs.clear();
+        invalid_configs.insert(checkpoint.invalid_configs.begin(),
+            checkpoint.invalid_configs.end());
+        restored_window = checkpoint.window;
         for (const auto& checkpoint_var : checkpoint.variables) {
             auto var = vars.find(checkpoint_var.first);
             var->second.current_index = checkpoint_var.second.current_index;
             var->second.best_index = checkpoint_var.second.best_index;
             var->second.set_current_value();
         }
+        if (current_config_invalid()) {
+            restored_window = WindowCheckpoint();
+            getNewSettings();
+        }
+        return true;
+    }
+    bool get_restored_window(WindowCheckpoint& window) const {
+        if (!restored_window.valid || restored_window.samples <= 0.0) {
+            return false;
+        }
+        window = restored_window;
+        return true;
+    }
+    bool consume_restored_window(WindowCheckpoint& window) {
+        if (!get_restored_window(window)) {
+            return false;
+        }
+        restored_window = WindowCheckpoint();
         return true;
     }
     void printBestSettings() {

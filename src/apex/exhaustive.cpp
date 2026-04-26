@@ -71,6 +71,11 @@ void Exhaustive::evaluate(double new_cost) {
     for (auto& v : vars) { log.getstream() << v.second.toString() << ","; }
     log.getstream() << new_cost << std::endl;
     */
+    if (!std::isfinite(new_cost)) {
+        invalid_configs.insert(current_config_key());
+        k++;
+        return;
+    }
     if (new_cost < cost) {
         if (new_cost < best_cost) {
             best_cost = new_cost;
@@ -92,5 +97,4 @@ void Exhaustive::evaluate(double new_cost) {
 } // exhaustive
 
 } // apex
-
 

@@ -347,6 +347,7 @@ public:
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedTunings;
     std::map<std::string, std::map<size_t, struct Kokkos_Tools_VariableValue> > cachedBestSoFar;
     std::map<std::string, apex::exhaustive::Checkpoint> cachedExhaustiveCheckpoints;
+    std::map<std::string, apex::exhaustive::WindowCheckpoint> partialWindows;
     std::map<std::string, CachedContextStatus> cachedContextStatus;
     int saved_node_id;
 };
@@ -532,6 +533,35 @@ void writeRequestResults(std::ofstream& results,
     }
 }
 
+void mergeWindowCheckpoint(apex::exhaustive::WindowCheckpoint& target,
+    const apex::exhaustive::WindowCheckpoint& source) {
+    if (!source.valid || source.samples <= 0.0) { return; }
+    if (!target.valid || target.samples <= 0.0) {
+        target = source;
+        return;
+    }
+    target.samples += source.samples;
+    target.accumulated += source.accumulated;
+    if (source.minimum != 0.0 &&
+        (target.minimum == 0.0 || source.minimum < target.minimum)) {
+        target.minimum = source.minimum;
+    }
+    if (source.maximum > target.maximum) {
+        target.maximum = source.maximum;
+    }
+}
+
+void recordPartialWindow(KokkosSession& session, const std::string& name,
+    double value) {
+    apex::exhaustive::WindowCheckpoint source;
+    source.valid = true;
+    source.samples = 1.0;
+    source.accumulated = value;
+    source.minimum = value;
+    source.maximum = value;
+    mergeWindowCheckpoint(session.partialWindows[name], source);
+}
+
 void writeExhaustiveCheckpoint(std::ofstream& results,
     const apex::exhaustive::Checkpoint& checkpoint) {
     if (!checkpoint.valid) { return; }
@@ -540,6 +570,14 @@ void writeExhaustiveCheckpoint(std::ofstream& results,
     results << "    MaxIterations: " << checkpoint.kmax << std::endl;
     results << "    Cost: " << checkpoint.cost << std::endl;
     results << "    BestCost: " << checkpoint.best_cost << std::endl;
+    results << "    WindowSamples: " << checkpoint.window.samples
+        << std::endl;
+    results << "    WindowAccumulated: " << checkpoint.window.accumulated
+        << std::endl;
+    results << "    WindowMinimum: " << checkpoint.window.minimum
+        << std::endl;
+    results << "    WindowMaximum: " << checkpoint.window.maximum
+        << std::endl;
     results << "    NumVars: " << checkpoint.variables.size() << std::endl;
     for (const auto& variable : checkpoint.variables) {
         results << "    Variable: \"" << variable.first << "\"" << std::endl;
@@ -551,6 +589,11 @@ void writeExhaustiveCheckpoint(std::ofstream& results,
             << std::endl;
         results << "    CandidateHash: \"" << variable.second.candidate_hash
             << "\"" << std::endl;
+    }
+    results << "    NumInvalidConfigs: " << checkpoint.invalid_configs.size()
+        << std::endl;
+    for (const auto& config : checkpoint.invalid_configs) {
+        results << "    InvalidConfig: \"" << config << "\"" << std::endl;
     }
 }
 
@@ -661,6 +704,13 @@ void KokkosSession::writeCache(void) {
             strategy == apex_ah_tuning_strategy::APEX_RANDOM;
         apex::exhaustive::Checkpoint checkpoint;
         bool hasCheckpoint = request->get_exhaustive_checkpoint(checkpoint);
+        if (hasCheckpoint) {
+            auto partialWindow = partialWindows.find(req.first);
+            if (partialWindow != partialWindows.end()) {
+                mergeWindowCheckpoint(checkpoint.window,
+                    partialWindow->second);
+            }
+        }
         CachedContextStatus status = converged ?
             CachedContextStatus::converged :
             (hasCheckpoint ? CachedContextStatus::in_progress :
@@ -825,6 +875,23 @@ apex::exhaustive::Checkpoint parseExhaustiveCheckpoint(
     if (!std::getline(results, line)) { return checkpoint; }
     checkpoint.best_cost = atof(cacheValue(line).c_str());
     if (!std::getline(results, line)) { return checkpoint; }
+    if (line.find("WindowSamples", 0) != std::string::npos) {
+        checkpoint.window.samples = atof(cacheValue(line).c_str());
+        if (!std::getline(results, line)) { return checkpoint; }
+        if (line.find("WindowAccumulated", 0) != std::string::npos) {
+            checkpoint.window.accumulated = atof(cacheValue(line).c_str());
+            if (!std::getline(results, line)) { return checkpoint; }
+        }
+        if (line.find("WindowMinimum", 0) != std::string::npos) {
+            checkpoint.window.minimum = atof(cacheValue(line).c_str());
+            if (!std::getline(results, line)) { return checkpoint; }
+        }
+        if (line.find("WindowMaximum", 0) != std::string::npos) {
+            checkpoint.window.maximum = atof(cacheValue(line).c_str());
+            if (!std::getline(results, line)) { return checkpoint; }
+        }
+        checkpoint.window.valid = checkpoint.window.samples > 0.0;
+    }
     size_t numvars = atol(cacheValue(line).c_str());
     for (size_t i = 0 ; i < numvars ; i++) {
         if (!std::getline(results, line)) { return checkpoint; }
@@ -852,6 +919,18 @@ apex::exhaustive::Checkpoint parseExhaustiveCheckpoint(
         }
         checkpoint.variables.insert(
             std::make_pair(variable_name, variable));
+    }
+    std::streampos beforeLine = results.tellg();
+    if (std::getline(results, line)) {
+        if (line.find("NumInvalidConfigs", 0) != std::string::npos) {
+            size_t numInvalid = atol(cacheValue(line).c_str());
+            for (size_t i = 0 ; i < numInvalid ; i++) {
+                if (!std::getline(results, line)) { return checkpoint; }
+                checkpoint.invalid_configs.push_back(cacheValue(line));
+            }
+        } else {
+            results.seekg(beforeLine);
+        }
     }
     checkpoint.valid = true;
     return checkpoint;
@@ -1538,8 +1617,20 @@ bool handle_start(const std::string & name, const size_t vars,
                 //abort();
                 return 0.0;
             }
-            double result = profile->minimum;
-            if (result == 0.0) result = profile->accumulated/profile->calls;
+            double calls = profile->calls;
+            double accumulated = profile->accumulated;
+            double minimum = profile->minimum;
+            apex::exhaustive::WindowCheckpoint window;
+            if (request->consume_exhaustive_window_checkpoint(window)) {
+                calls += window.samples;
+                accumulated += window.accumulated;
+                if (window.minimum != 0.0 &&
+                    (minimum == 0.0 || window.minimum < minimum)) {
+                    minimum = window.minimum;
+                }
+            }
+            double result = minimum;
+            if (result == 0.0) result = accumulated/calls;
             result = result * 1.0e-9; // convert to seconds to help search math
             if(verbose) {
                 std::cout << std::string(getDepth(), ' ');
@@ -1688,11 +1779,22 @@ void handle_stop(const std::string & name) {
         std::cerr << "ERROR: No data for " << name << std::endl;
     } else {
         apex_profile * profile = apex::get_profile(name);
+        std::shared_ptr<apex_tuning_request> request = search->second;
+        apex::exhaustive::WindowCheckpoint window;
+        double restoredCalls = 0.0;
+        if (request->get_exhaustive_window_checkpoint(window)) {
+            restoredCalls = window.samples;
+        }
+        double currentCalls = 0.0;
+        auto partialWindow = session.partialWindows.find(name);
+        if (partialWindow != session.partialWindows.end()) {
+            currentCalls = partialWindow->second.samples;
+        } else if (profile != nullptr) {
+            currentCalls = profile->calls;
+        }
         if(session.window == 1 ||
-           (profile != nullptr &&
-            profile->calls >= session.window)) {
+           ((currentCalls + restoredCalls) >= session.window)) {
             //std::cout << "Num calls: " << profile->calls << std::endl;
-            std::shared_ptr<apex_tuning_request> request = search->second;
             /* If we are in a nested context, and this is the outermost
              * context, we want to not allow it to converge until all of
              * the inner contexts have also converged! */
@@ -1700,6 +1802,7 @@ void handle_stop(const std::string & name) {
             apex::custom_event(request->get_trigger(), &childrenConverged);
             // Reset counter so each measurement is fresh.
             apex::reset(name);
+            session.partialWindows.erase(name);
         }
     }
 }
@@ -1962,7 +2065,9 @@ void kokkosp_end_context(const size_t contextId) {
             std::cout << name->second << "\t" << (end-(start->second)) << " sec." << std::endl;
         }
         if (session.used_history.count(contextId) == 0) {
-            apex::sample_value(name->second, (double)(end-(start->second)));
+            double elapsed = (double)(end-(start->second));
+            apex::sample_value(name->second, elapsed);
+            recordPartialWindow(session, name->second, elapsed);
             handle_stop(name->second);
         } else {
             session.used_history.erase(contextId);
