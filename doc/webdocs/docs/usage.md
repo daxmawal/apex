@@ -396,6 +396,53 @@ Like OpenACC, nothing special needs to be done to enable Kokkos support.
 
 Enabling Kokkos support requires setting the `KOKKOS_PROFILE_LIBRARY` environment variable with the path to `libapex.so`, or by using the `apex_exec` script with the `--apex:kokkos` flag. We also recommend using the `--apex:kokkos-fence` option which will time the full kernel execution time, not just the time to launch a kernel if the back-end activity is not measured by some other method (OMPT, CUDA, HIP, SYCL, OpenACC). APEX also has experimental autotuning support for Kokkos kernels, see <https://github.com/UO-OACISS/apex/wiki/Using-APEX-with-Kokkos#autotuning-support>.
 
+#### Kokkos tuning cache and replay
+
+APEX can save Kokkos tuning state in a YAML cache and continue the search in a
+later run. A typical run looks like this:
+
+```
+export APEX_KOKKOS_TUNING_CACHE=kokkos-tuning.yaml
+export APEX_KOKKOS_TUNING_POLICY=exhaustive
+apex_exec --apex:kokkos --apex:kokkos-tuning --apex:kokkos-fence \
+  ./my_kokkos_app
+```
+
+The exhaustive policy is the safest starting point for restart/resume because
+the search order is deterministic. APEX records the current search position,
+invalid configurations, repeated samples for the current configuration, and the
+best configuration seen so far. Cache writes are atomic.
+
+In cache-only mode, APEX only replays entries marked `converged` by default.
+Entries marked `best_so_far` are not considered converged unless
+`APEX_KOKKOS_TUNING_CACHE_ALLOW_BEST_SO_FAR` is set.
+
+APEX cannot automatically re-run a kernel. It does not own the Kokkos lambda,
+the views, MPI calls, I/O, random number state, or other side effects. If the
+application can provide replay buffers, it can opt in with:
+
+```cpp
+auto result = apex::kokkos::replay_kernel_until_converged(
+    "my_kernel", 200,
+    [&] {
+        Kokkos::deep_copy(a_replay, a);
+        Kokkos::deep_copy(b_replay, b);
+        Kokkos::deep_copy(c_replay, 0.0);
+        Kokkos::fence();
+    },
+    [&] {
+        run_kernel(a_replay, b_replay, c_replay);
+        Kokkos::fence();
+    });
+
+run_kernel(a, b, c);
+Kokkos::fence();
+```
+
+The first lambda resets the replay buffers. Keep that work outside the measured
+tuning context. The second lambda runs the replayed kernel. Fence when the
+backend is asynchronous and the timing needs to include the full kernel.
+
 #### Configuring APEX for RAJA support
 
 Like OpenACC, nothing special needs to be done to enable RAJA support.
